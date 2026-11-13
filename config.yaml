@@ -6,6 +6,13 @@ output_dir: "./PYPs/ML.PYPs/"
 # Question Papers section URL on Knimbus (used as the starting point)
 base_url: "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?sectionId=1ad6bd68-4cc6-4d8b-8550-2203b35075ef&sectionName=QUESTION+PAPERS"
 
+# ---- Optional credentials for auto-login ----------------------------------
+# If set, the script can log in automatically even in headless mode.
+# If left empty, run 'python pyq_fetch.py' in your own terminal to log in interactively.
+credentials:
+  email: ""
+  password: ""
+
 # ---- course / degree filter ----------------------------------------------
 # Target degree/course type. Papers downloaded will match this course.
 # Options matching Knimbus REPOSITORY filter:
@@ -24,16 +31,16 @@ max_pages: 15          # safety cap on result pages per subject
 
 # ---- subjects ------------------------------------------------------------
 # search   : query typed in Knimbus "search within results"
-# keywords : ALL must appear in the card title (and in text if available)
-# exclude  : if ANY appears, the paper is skipped (e.g. "advanced" to drop "Advanced Machine Learning")
-# sem      : semester taught in -> accepts sem-1, sem, sem+1 (or set to null / "any" to accept all semesters)
+# keywords : ALL must appear in the card title
+# exclude  : if ANY appears in title, paper is skipped (e.g. "advanced" to drop "Advanced Machine Learning")
+# sem      : target semester (e.g. 5, [5, 6], or null to accept all semesters)
 # codes    : optional list of course codes (leave [] to accept all codes)
 subjects:
   - name: Machine Learning
     search: machine learning
     keywords: ["machine learning"]
     exclude: ["advanced", "introduction"]
-    sem: 5
+    sem: null
     codes: []
 
   # - name: DBMS

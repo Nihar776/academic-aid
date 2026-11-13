@@ -16,13 +16,17 @@ Usage:
     python pyq_fetch.py --only "Machine Learning" # fetch for a single subject
     python pyq_fetch.py --debug                 # saves screenshot + HTML when something looks off
 """
-import argparse, hashlib, io, json, re, sys, time
+import argparse, hashlib, io, json, os, re, sys, time
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote, urlparse, parse_qsl, urlencode, urlunparse
 
 import yaml
+from playwright.sync_api import sync_playwright  # type: ignore
 from pypdf import PdfReader
+
+# Ensure unbuffered real-time stdout output
+sys.stdout.reconfigure(line_buffering=True)
 
 ORD = {
     "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
@@ -114,7 +118,7 @@ def parse_paper(text: str) -> dict:
     info = {}
 
     # programme
-    if "diploma in" in low or "diploma engineering" in low or "diploma" in low:
+    if re.search(r"diploma\s+(in|engineering)\b", low) and not re.search(r"b\.?\s?tech|bachelor of tech", low):
         info["programme"] = "diploma"
     elif re.search(r"m\.?\s?tech|master of tech|m\.?\s?e\.?\b|mba|mca", low):
         info["programme"] = "mtech"
@@ -137,14 +141,19 @@ def parse_paper(text: str) -> dict:
     m = re.search(r"(?:course|subject|sub|paper)\s*code\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-]{3,})", t, re.I)
     info["code"] = m.group(1).upper() if m else None
 
-    # exam season + year, then date
-    m = re.search(r"(summer|winter|supplementary)[^\d]{0,15}(20\d\d)", t, re.I)
-    info["season"] = m.group(1).title() if m else None
-    info["year"] = int(m.group(2)) if m else None
-    m = re.search(r"date\s*[:\-]?\s*(\d{1,2})\s*[/.\-]\s*(\d{1,2})\s*[/.\-]\s*(20\d\d)", t, re.I)
-    if m:
-        info["date"] = f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
-        info["year"] = info["year"] or int(m.group(3))
+    # exam season
+    m_season = re.search(r"\b(Summer|Winter|Supplementary)\b", t, re.I)
+    info["season"] = m_season.group(1).title() if m_season else None
+
+    # exam year
+    m_year = re.search(r"\b(20\d\d)\b", t)
+    info["year"] = int(m_year.group(1)) if m_year else None
+
+    # exam date
+    m_date = re.search(r"date\s*[:\-]?\s*(\d{1,2})\s*[/.\-]\s*(\d{1,2})\s*[/.\-]\s*(20\d\d)", t, re.I)
+    if m_date:
+        info["date"] = f"{m_date.group(3)}-{int(m_date.group(2)):02d}-{int(m_date.group(1)):02d}"
+        info["year"] = info["year"] or int(m_date.group(3))
     return info
 
 
@@ -209,85 +218,128 @@ def dump(page, name):
     Path(f"debug/{name}.html").write_text(page.content(), encoding="utf-8")
 
 
-def wait_for_login(page):
-    if "login" in page.url:
-        print(">>> Log in to the DBATU library in the opened browser window. Waiting...")
+def handle_login(page, cfg, args):
+    if "login" not in page.url:
+        return
+
+    creds = cfg.get("credentials") or {}
+    email = getattr(args, "email", None) or os.getenv("KNIMBUS_EMAIL") or creds.get("email")
+    password = getattr(args, "password", None) or os.getenv("KNIMBUS_PASSWORD") or creds.get("password")
+
+    if email and password:
+        print(f">>> Auto-logging in with account: {email}...")
+        try:
+            page.fill("input#email, input[name='email'], input[type='email']", email)
+            page.fill("input#password, input[name='password'], input[type='password']", password)
+            page.click("button:has-text('Continue')")
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(3000)
+            if "login" not in page.url:
+                print(">>> Login successful!")
+                return
+        except Exception as e:
+            print(f">>> Auto-login attempt error: {e}")
+
+    # Manual login instructions
+    print(">>> Log in to the DBATU library in the browser window.")
+    print("    Waiting for login to complete...")
+    try:
         page.wait_for_function("() => !location.href.includes('login')", timeout=0)
         time.sleep(2)
+    except Exception as e:
+        print(f">>> Login wait interrupted: {e}")
 
 
 def apply_repository_filter(page, target_repo_label: str):
     """
-    Ensures the repository facet filter (e.g. 'B.Tech Question Paper') is checked in Knimbus sidebar.
+    Attempts to select the repository filter (e.g. 'B.Tech Question Paper') in Knimbus sidebar.
+    Uses non-blocking short timeouts.
     """
     if not target_repo_label:
         return
 
     try:
-        # Check if already applied in top active filter tags
+        # 1. Check if already applied in top active filter tags
         applied = page.locator(".applied-filters, [class*='applied'], [class*='filter-tag']")
         if applied.count() > 0:
             for idx in range(applied.count()):
                 if target_repo_label.lower() in applied.nth(idx).inner_text().lower():
                     return
 
-        # Look for the target option in the left sidebar
-        repo_item = page.locator(f"xpath=//label[contains(., '{target_repo_label}')] | //span[contains(., '{target_repo_label}')] | //a[contains(., '{target_repo_label}')]")
-        if repo_item.count() == 0:
-            # If REPOSITORY accordion is collapsed, expand it
-            repo_header = page.locator("xpath=//*[normalize-space(text())='REPOSITORY' or contains(text(), 'REPOSITORY')]")
+        # 2. Check if the option is already visible in the sidebar
+        visible_target = page.locator(f"xpath=//label[contains(., '{target_repo_label}')] | //span[contains(., '{target_repo_label}')] | //a[contains(., '{target_repo_label}')]").locator("visible=true")
+        if visible_target.count() == 0:
+            # Expand REPOSITORY header if collapsed
+            repo_header = page.locator("xpath=//*[contains(@class, 'filter') or contains(@class, 'sidebar') or contains(@class, 'facet')]//*[normalize-space(text())='REPOSITORY' or contains(text(), 'REPOSITORY')]")
             if repo_header.count() > 0:
-                repo_header.first.click()
-                page.wait_for_timeout(600)
-                repo_item = page.locator(f"xpath=//label[contains(., '{target_repo_label}')] | //span[contains(., '{target_repo_label}')] | //a[contains(., '{target_repo_label}')]")
+                try:
+                    repo_header.first.click(timeout=2000)
+                    page.wait_for_timeout(800)
+                except Exception:
+                    pass
 
-        if repo_item.count() > 0:
-            target = repo_item.first
+        # 3. Find visible checkbox or label
+        visible_target = page.locator(f"xpath=//label[contains(., '{target_repo_label}')] | //span[contains(., '{target_repo_label}')] | //a[contains(., '{target_repo_label}')]").locator("visible=true")
+        if visible_target.count() > 0:
+            target = visible_target.first
             cb = target.locator("input[type='checkbox']")
             if cb.count() > 0 and cb.first.is_checked():
-                return  # already selected
-
+                return
             print(f"  [filter] Selecting portal repository: '{target_repo_label}'...")
-            target.scroll_into_view_if_needed()
-            target.click()
+            target.click(timeout=3000)
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(1500)
     except Exception as e:
-        print(f"  [filter] Notice: Could not toggle UI repository filter ({e}). Pre-download card filter will enforce course filtering.")
+        print(f"  [filter] Note: Could not toggle UI filter ({e}). Card-level inspection will enforce course filtering.")
 
 
-def go_to_next_page(page, current_pg: int) -> bool:
+def go_to_page(page, n: int) -> bool:
     """
-    Navigates to the next page of results. Knimbus uses '>' for the Next button.
-    Falls back to clicking the next page number if available.
-    Returns False when on the last page.
+    Navigate to page n.
+    1. Tries JS click on the direct page number link (immune to sticky footers).
+    2. If page n is hidden behind an ellipsis (...), tries JS click on the Next button ('>').
+    3. Direct URL navigation fallback (&curPage=n).
+    Returns False if there are no more pages.
     """
-    try:
-        # 1. Click Next ('>') button
-        next_btn = page.locator("xpath=//a[normalize-space(text())='>'] | //button[normalize-space(text())='>'] | //li[not(contains(@class, 'disabled'))]/*[normalize-space(text())='>']")
-        if next_btn.count() > 0:
-            target = next_btn.first
-            if target.is_visible():
-                parent_cls = target.locator("xpath=..").get_attribute("class") or ""
-                btn_cls = target.get_attribute("class") or ""
-                if "disabled" not in parent_cls.lower() and "disabled" not in btn_cls.lower():
-                    target.scroll_into_view_if_needed()
-                    target.click()
-                    page.wait_for_load_state("networkidle")
-                    page.wait_for_timeout(1500)
-                    return True
-
-        # 2. Numbered button fallback for current_pg + 1
-        target_num = str(current_pg + 1)
-        num_btn = page.locator(f"xpath=//*[self::a or self::button or self::li][normalize-space(text())='{target_num}']")
-        if num_btn.count() > 0 and num_btn.first.is_visible():
-            num_btn.first.scroll_into_view_if_needed()
-            num_btn.first.click()
+    # 1. Try direct page number (using .last to click the inner <a> rather than <li>)
+    loc = page.locator(f"xpath=//*[self::a or self::button or self::li][normalize-space(text())='{n}']")
+    if loc.count() > 0:
+        try:
+            target = loc.last
+            target.evaluate("el => el.click()")
             page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)
             return True
-    except Exception as e:
-        print(f"  [pagination error]: {e}")
+        except Exception:
+            pass
+
+    # 2. Try Next button ('>' or Next)
+    next_loc = page.locator("xpath=//a[normalize-space(text())='>'] | //button[normalize-space(text())='>'] | //li[not(contains(@class, 'disabled'))]//*[normalize-space(text())='>'] | //a[@aria-label='Next']")
+    if next_loc.count() > 0:
+        try:
+            target = next_loc.last
+            target.evaluate("el => el.click()")
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(2000)
+            return True
+        except Exception:
+            pass
+
+    # 3. Direct URL navigation fallback
+    try:
+        curr_url = page.url
+        u = urlparse(curr_url)
+        q = dict(parse_qsl(u.query))
+        if q.get("curPage") != str(n):
+            q["curPage"] = str(n)
+            new_url = urlunparse(u._replace(query=urlencode(q)))
+            page.goto(new_url)
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(2000)
+            return True
+    except Exception:
+        pass
+
     return False
 
 
@@ -323,6 +375,9 @@ def main():
     ap.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     ap.add_argument("--only", help="Run only for a specific subject name")
     ap.add_argument("--course", help="Target course/degree type (e.g. 'B.Tech', 'Diploma', 'M.Tech', 'Pharmacy', 'all')")
+    ap.add_argument("--email", help="Knimbus login email (for automated headless login)")
+    ap.add_argument("--password", help="Knimbus login password")
+    ap.add_argument("--headless", action="store_true", help="Run browser in headless mode")
     ap.add_argument("--debug", action="store_true", help="Save debug screenshots and HTML dumps")
     args = ap.parse_args()
 
@@ -344,25 +399,31 @@ def main():
     print(f" Output Folder : {out}")
     print(f"==================================================")
 
-    from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             ".browser-profile",
             channel="chrome",
-            headless=False,
+            headless=args.headless,
             viewport={"width": 1366, "height": 800}
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(cfg["base_url"])
         page.wait_for_load_state("networkidle")
-        wait_for_login(page)
+        handle_login(page, cfg, args)
 
         for sub in cfg["subjects"]:
             if args.only and args.only.lower() != sub["name"].lower():
                 continue
 
             sem = sub.get("sem")
-            allowed = {sem - 1, sem, sem + 1} if isinstance(sem, int) else None
+            if sem is None or str(sem).lower() in ("any", "all", "none"):
+                allowed = None
+            elif isinstance(sem, list):
+                allowed = set(sem)
+            elif isinstance(sem, int):
+                allowed = {sem - 1, sem, sem + 1}
+            else:
+                allowed = None
             kws = [k.lower() for k in sub.get("keywords", [])]
             exc = [e.lower() for e in sub.get("exclude", [])]
             codes = {c.upper() for c in sub.get("codes", [])}
@@ -377,7 +438,7 @@ def main():
             page.goto(with_search(cfg["base_url"], sub["search"]))
             page.wait_for_load_state("networkidle")
             if "login" in page.url:
-                wait_for_login(page)
+                handle_login(page, cfg, args)
                 page.goto(with_search(cfg["base_url"], sub["search"]))
                 page.wait_for_load_state("networkidle")
 
@@ -390,8 +451,8 @@ def main():
 
             for pg in range(1, max_pages + 1):
                 if pg > 1:
-                    has_next = go_to_next_page(page, pg - 1)
-                    if not has_next:
+                    print(f"\n--- Navigating to page {pg} ---")
+                    if not go_to_page(page, pg):
                         print(f"  Reached last page at page {pg - 1}.")
                         break
 
@@ -403,18 +464,14 @@ def main():
                     print(f"  page {pg}: no results found, stopping.")
                     break
 
-                # Re-verify repository filter state on subsequent pages if needed
-                if repo_label and pg == 1:
-                    apply_repository_filter(page, repo_label)
-
                 read_buttons = page.locator("button:has-text('Read')")
                 n = read_buttons.count()
                 print(f"  page {pg}: found {n} paper cards")
 
                 for i in range(n):
                     btn = page.locator("button:has-text('Read')").nth(i)
-                    # Find closest parent card container
-                    card = btn.locator("xpath=ancestor::*[contains(@class, 'card') or contains(@class, 'item') or count(.//button[normalize-space()='Read'])=1][1]")
+                    # Find outermost card container for this Read button
+                    card = btn.locator("xpath=ancestor::div[count(.//button[normalize-space()='Read'])=1][last()]")
                     ctext = card.inner_text() if card.count() > 0 else btn.inner_text()
 
                     c = parse_card(ctext)
@@ -423,23 +480,31 @@ def main():
                         continue
                     seen_cards.add(card_fingerprint)
 
+                    print(f"    [{i+1}/{n}] '{c['title']}' [{c['code'] or 'NOCODE'}] {c['season'] or ''} {c['year'] or ''} (prog: {c['prog']})")
+
                     # 1. Subject keyword and exclusion check on card title
                     tl = c["title"].lower()
-                    if not all(k in tl for k in kws) or any(e in tl for e in exc):
+                    if not all(k in tl for k in kws):
+                        print(f"      - Skip: title does not match keywords {kws}")
+                        continue
+                    if any(e in tl for e in exc):
+                        print(f"      - Skip: title contains excluded keyword")
                         continue
 
                     # 2. Year check from card
                     if c["year"] and c["year"] < since:
+                        print(f"      - Skip: year {c['year']} < {since}")
                         continue
 
                     # 3. Course check from card (e.g. Reject Diploma [23DCE...] when B.Tech is required)
                     if prog_target != "all":
                         if c["prog"] != "unknown" and c["prog"] != prog_target:
-                            print(f"    - Skip non-{prog_target} card: '{c['title']}' [{c['code']}]")
+                            print(f"      - Skip: non-{prog_target} card (detected: {c['prog']})")
                             continue
 
                     # 4. Optional course code whitelist check from card
                     if codes and c["code"] and c["code"] not in codes:
+                        print(f"      - Skip: code {c['code']} not in whitelist")
                         continue
 
                     # Fetch PDF URL
@@ -459,7 +524,8 @@ def main():
                         continue
 
                     h = hashlib.sha256(data).hexdigest()
-                    if h in manifest["hashes"]:
+                    if h in manifest["hashes"] and manifest["hashes"][h] != "skipped":
+                        print(f"      = Already downloaded: {manifest['hashes'][h]}")
                         continue
 
                     # Inspect PDF body
@@ -475,39 +541,32 @@ def main():
 
                     verdict = "keep"
 
-                    # Course verification from PDF text
+                    # 1. Course verification
                     if prog_target != "all":
-                        # If the PDF explicitly declares another programme (e.g. Diploma paper), skip it
-                        if info["programme"] not in (prog_target, "unknown"):
-                            print(f"    - Skip: PDF indicates programme is '{info['programme']}' (expected '{prog_target}')")
+                        # If the course code starts with BT, it is definitely B.Tech
+                        if re.search(r"^BT|BTECH|UD.*PEC", code):
+                            pass
+                        elif info["programme"] not in (prog_target, "unknown"):
+                            print(f"      - Skip PDF: programme '{info['programme']}' does not match target '{prog_target}'")
                             verdict = "skip"
                         elif c["prog"] not in (prog_target, "unknown"):
+                            print(f"      - Skip PDF: card prog '{c['prog']}' does not match target '{prog_target}'")
                             verdict = "skip"
 
-                    # Subject keyword verification from text (only if text layer is present)
-                    if text.strip() and verdict == "keep":
-                        if not all(k in low for k in kws) or any(e in low for e in exc):
-                            verdict = "skip"
-
-                    # Year verification
-                    if year != "NA" and int(year) < since:
+                    # 2. Year verification
+                    if verdict == "keep" and year != "NA" and int(year) < since:
+                        print(f"      - Skip PDF: year {year} < {since}")
                         verdict = "skip"
 
-                    # Course code whitelist verification
-                    if codes and code not in codes:
+                    # 3. Course code whitelist verification
+                    if verdict == "keep" and codes and code not in codes:
+                        print(f"      - Skip PDF: code '{code}' not in whitelist {codes}")
                         verdict = "skip"
 
-                    # Semester verification (if semester could be extracted)
-                    if allowed and sem_num is not None and sem_num not in allowed:
+                    # 4. Semester verification (only if allowed semesters are configured and sem_num is known)
+                    if verdict == "keep" and allowed and sem_num is not None and sem_num not in allowed:
+                        print(f"      - Skip PDF: semester {sem_num} not in allowed {allowed}")
                         verdict = "skip"
-
-                    # If PDF is scanned (no text layer), but card matched all criteria and course filter, KEEP it!
-                    if not text.strip() and verdict == "keep":
-                        verdict = "keep"  # Scanned paper from matched course/subject
-
-                    # Ambiguous classification check
-                    if prog_target != "all" and info["programme"] == "unknown" and c["prog"] == "unknown" and not repo_label:
-                        verdict = "review"
 
                     if verdict == "skip":
                         manifest["hashes"][h] = "skipped"
@@ -524,7 +583,7 @@ def main():
                     manifest["hashes"][h] = str(dest)
                     manifest["keys"][key] = str(dest)
                     kept += (verdict == "keep")
-                    print(f"    + [{verdict.upper():6}] {dest.name}")
+                    print(f"    + [SAVED ] {dest.name}")
                     manifest_path.write_text(json.dumps(manifest, indent=2))
 
             print(f"  -> Total saved for '{sub['name']}': {kept} paper(s)")
