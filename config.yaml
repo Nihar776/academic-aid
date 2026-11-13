@@ -53,49 +53,49 @@ subjects:
     search: machine learning
     keywords: ["machine learning"]
     exclude: ["advanced", "introduction"]
-    sem: null
+    sem: 5
     codes: []
 
   - name: Theory of Computations
     search: theory of computation
     keywords: ["theory of computation"]
     exclude: []
-    sem: null
+    sem: 5
     codes: []
 
   - name: Operating Systems
     search: operating systems
     keywords: ["operating system"]
     exclude: ["advanced"]
-    sem: null
+    sem: 5
     codes: []
 
   - name: Database Management Systems
     search: database management
     keywords: ["database"]
     exclude: ["advanced"]
-    sem: null
+    sem: 5
     codes: []
 
   - name: Computer Graphics
     search: computer graphics
     keywords: ["computer graphics"]
     exclude: []
-    sem: null
+    sem: 5
     codes: []
 
   - name: Foundations of Quantum Technologies
     search: quantum
     keywords: ["quantum"]
     exclude: ["mtech", "advanced"]
-    sem: null
+    sem: 5
     codes: []
 
   - name: Entrepreneurship Skills and Digital Marketing Strategies
     search: entrepreneurship
     keywords: ["entrepreneurship"]
     exclude: []
-    sem: null
+    sem: 5
     codes: []
 
 
