@@ -8,11 +8,13 @@ Filename format:
     (-n appears ONLY when more than 1 distinct paper shares the exact same metadata)
 
 Features:
-    - Automatically filters to B.Tech Question Papers (excludes Diploma, M.Tech, etc.)
-    - Automatically avoids Mid-Semester / Class Test papers
-    - Portal UI filter selection for Degree & Exam Type (Regular/Supplementary)
+    - Automatically filters to B.Tech Question Papers (excludes Diploma, M.Tech, MCA, etc.)
+    - Automatically avoids Mid-Semester / Class Test papers (dual-layer check: card & PDF)
+    - Selects B.Tech, Regular, and Supplementary portal filters via fast JS DOM clicks
+    - Pre-download semester check from course code to skip unnecessary PDF fetches
+    - Multi-vector PDF download engine (direct href, network capture, download events, popup/embeds)
     - Full multi-page pagination with JS DOM clicks and direct URL fallback
-    - Incremental downloads with duplicate detection and collision resolution
+    - Incremental downloads with SHA-256 duplicate detection and automatic collision resolution
 
 Usage:
     python pyq_fetch.py                         # uses course & subjects in config.yaml (defaults to B.Tech)
@@ -75,32 +77,37 @@ def classify_code_or_title(code: str, title: str) -> str:
     Identifies degree programme from DBATU course code and title.
     DBATU code patterns:
       - Diploma: 23DCE..., DME..., DEE..., 21D...
-      - B.Tech: BT..., BTECH..., UD...PEC..., PEC...
-      - M.Tech: MT..., MTECH..., MCA...
+      - B.Tech: BT..., BTECH..., [0-9]{2}(UD|AF)..., UD...PEC..., PEC...
+      - M.Tech: MT..., MTECH...
+      - MCA: MC..., MCA...
       - Pharmacy: BP...
       - Architecture: AR..., BARCH...
     """
-    code = (code or "").upper()
-    title = (title or "").lower()
+    code = (code or "").upper().strip()
+    title = (title or "").lower().strip()
 
     # Code-based classification
     if re.search(r"^(2\d)?D[A-Z]{2}|DCE|DME|DEE|DCI|DCH|DPE", code):
         return "diploma"
-    if re.search(r"^BT|BTECH|[0-9]{2}UD.*PEC|UD.*PEC|^PEC", code):
+    if re.search(r"^BT|BTECH|^\d{2}(UD|AF)|UD.*PEC|^PEC", code):
         return "btech"
-    if re.search(r"^MT|MTECH|MCA", code):
+    if re.search(r"^MT|MTECH", code):
         return "mtech"
+    if re.search(r"^MC", code):
+        return "mca"
     if re.search(r"^BP\d|PHARM", code):
         return "pharmacy"
     if re.search(r"^AR|BARCH", code):
         return "architecture"
 
-    # Title-based classification
-    if "diploma" in title:
+    # Title-based classification (with positive-evidence guards)
+    if re.search(r"\bdiploma\s+(in|of|engineering)\b", title):
         return "diploma"
-    if "m.tech" in title or "master of tech" in title or "mca" in title:
+    if re.search(r"\bm\.?\s?tech\b|master of tech", title):
         return "mtech"
-    if "b.tech" in title or "bachelor of tech" in title:
+    if re.search(r"\bmca\b|master of computer app", title):
+        return "mca"
+    if re.search(r"\bb\.?\s?tech\b|bachelor of tech", title):
         return "btech"
     if "pharmacy" in title:
         return "pharmacy"
@@ -129,16 +136,18 @@ def parse_paper(text: str) -> dict:
     low_marks = bool(re.search(r"\bmax(?:imum)?\s*marks\s*[:\-]?\s*(?:20|25|30)\b", low))
     info["is_mid_sem"] = is_mid_sem or low_marks
 
-    # Programme
-    if re.search(r"diploma\s+(in|engineering)\b", low) and not re.search(r"b\.?\s?tech|bachelor of tech", low):
-        info["programme"] = "diploma"
-    elif re.search(r"m\.?\s?tech|master of tech|m\.?\s?e\.?\b|mba|mca", low):
-        info["programme"] = "mtech"
-    elif re.search(r"b\.?\s?tech|bachelor of tech|degree in engineering|faculty of engineering", low):
+    # Programme with positive evidence guards
+    if re.search(r"\bb\.?\s?tech\b|bachelor of tech|degree in engineering|faculty of engineering", low):
         info["programme"] = "btech"
-    elif re.search(r"pharm", low):
+    elif re.search(r"\bdiploma\s+(in|of|engineering)\b", low) and not re.search(r"\bb\.?\s?tech\b|bachelor of tech", low):
+        info["programme"] = "diploma"
+    elif re.search(r"\bm\.?\s?tech\b|master of tech", low):
+        info["programme"] = "mtech"
+    elif re.search(r"\bmca\b|master of computer app", low):
+        info["programme"] = "mca"
+    elif re.search(r"\bpharm", low):
         info["programme"] = "pharmacy"
-    elif re.search(r"architect", low):
+    elif re.search(r"\barchitect", low):
         info["programme"] = "architecture"
     else:
         info["programme"] = "unknown"
@@ -150,16 +159,19 @@ def parse_paper(text: str) -> dict:
     info["sem"] = ORD.get(m.group(1).lower()) if m else None
 
     # Course code
-    m = re.search(r"(?:course|subject|sub|paper)\s*code\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-]+)", t, re.I)
+    m = re.search(r"(?:course|subject|sub|paper)\s*code\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-_]{3,})", t, re.I)
     info["code"] = m.group(1).upper() if m else None
 
-    # Exam season
-    m_season = re.search(r"\b(Summer|Winter)\b", t, re.I)
-    info["season"] = m_season.group(1).title() if m_season else None
-
-    # Exam year
-    m_year = re.search(r"\b(20\d\d)\b", t)
-    info["year"] = int(m_year.group(1)) if m_year else None
+    # Exam season + year from header (e.g. "End Semester Examination Summer 2026")
+    m_pair = re.search(r"\b(Summer|Winter|Supplementary)\b[^\d\n]{0,25}\b(20\d\d)\b", t, re.I)
+    if m_pair:
+        info["season"] = m_pair.group(1).title()
+        info["year"] = int(m_pair.group(2))
+    else:
+        m_season = re.search(r"\b(Summer|Winter|Supplementary)\b", t, re.I)
+        info["season"] = m_season.group(1).title() if m_season else None
+        m_year = re.search(r"\b(20\d\d)\b", t)
+        info["year"] = int(m_year.group(1)) if m_year else None
 
     # Exam date
     m_date = re.search(r"date\s*[:\-]?\s*(\d{1,2})\s*[/.\-]\s*(\d{1,2})\s*[/.\-]\s*(20\d\d)", t, re.I)
@@ -174,38 +186,33 @@ def parse_card(text: str) -> dict:
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
     # Extract course code in brackets [] or parentheses ()
-    code_m = re.search(r"[\[\(]([A-Za-z0-9\-]+)[\]\)]", text)
-    code = code_m.group(1).upper() if code_m else None
+    code_m = re.search(r"[\[\(]([A-Za-z0-9\-_/\s]+)[\]\)]", text)
+    code = re.sub(r"\s+", "", code_m.group(1)).upper() if code_m else None
 
     # Fallback: Bare DBATU code pattern if not enclosed in brackets/parentheses
     if not code:
-        bare_m = re.search(r"\b(2\dD[A-Za-z0-9\-]+|BT[A-Za-z0-9\-]+|UD[A-Za-z0-9\-]+|MCA[A-Za-z0-9\-]+|MT[A-Za-z0-9\-]+|BP[A-Za-z0-9\-]+|AR[A-Za-z0-9\-]+)\b", text, re.I)
+        bare_m = re.search(r"\b(2\dD[A-Za-z0-9\-]+|BT[A-Za-z0-9\-]+|\d{2}(?:UD|AF)[A-Za-z0-9\-]+|UD[A-Za-z0-9\-]+|MCA[A-Za-z0-9\-]+|MT[A-Za-z0-9\-]+|BP[A-Za-z0-9\-]+|AR[A-Za-z0-9\-]+)\b", text, re.I)
         code = bare_m.group(1).upper() if bare_m else None
 
     # Extract clean title: remove [CODE] or (CODE) from title lines
-    title_candidates = [
-        l for l in lines
-        if not re.search(r"^(question paper|read|dr\.?\s*babasaheb|summer|winter|supplementary|\d{4})$", l, re.I)
-        and not (l.startswith("[") and l.endswith("]"))
-        and not (l.startswith("(") and l.endswith(")"))
-    ]
+    skip = re.compile(r"^(question paper|read|dr\.?\s*babasaheb.*|(summer|winter|supplementary)( semester)?|\d{4}|"
+                      rf"({MONTHS})\s+\d{{4}})$", re.I)
+    title_candidates = [l for l in lines if not skip.match(l)]
     title = title_candidates[0] if title_candidates else ""
-    title = re.sub(r"[\[\(].*?[\]\)]", "", title).strip()
+    clean_title = re.sub(r"\s*[\[\(].*?[\]\)]\s*$", "", title).strip()
 
-    # Extract year (4-digit)
+    # Extract year & month
+    month_m = re.search(rf"\b({MONTHS})\s+(20\d\d)\b", text, re.I)
     year_m = re.search(r"\b(20\d\d)\b", text)
-    year = int(year_m.group(1)) if year_m else None
+    year = int(month_m.group(2)) if month_m else (int(year_m.group(1)) if year_m else None)
 
     # Extract exam season
-    season_m = re.search(r"\b(Summer|Winter)\b", text, re.I)
+    season_m = re.search(r"\b(Summer|Winter|Supplementary)\b", text, re.I)
     season = season_m.group(1).title() if season_m else None
-
-    # Extract month
-    month_m = re.search(rf"\b({MONTHS})\b", text, re.I)
     month = month_m.group(1).title() if month_m else None
 
     # Identify course program from card text and code
-    prog = classify_code_or_title(code, title)
+    prog = classify_code_or_title(code, clean_title or title)
 
     # Check for mid-semester indicators on the card
     is_mid_sem = bool(re.search(r"\b(mid\s*sem|mid\s*semester|class\s*test|ca-?\d|unit\s*test)\b", text, re.I))
@@ -214,7 +221,8 @@ def parse_card(text: str) -> dict:
     is_suppl = bool(re.search(r"\b(supplementary|supplymentary|suppl|atkt)\b", text, re.I))
 
     return {
-        "title": title,
+        "title": clean_title or title,
+        "full_title": title,
         "code": code,
         "year": year,
         "season": season,
@@ -246,6 +254,16 @@ def dump(page, name):
     Path(f"debug/{name}.html").write_text(page.content(), encoding="utf-8")
 
 
+def results_count(page) -> int | None:
+    """Reads total results count from 'Showing X for All Documents'."""
+    try:
+        t = page.locator("text=/Showing\\s+[\\d,]+\\s+for/i").first.inner_text(timeout=2000)
+        m = re.search(r"Showing\s+([\d,]+)", t)
+        return int(m.group(1).replace(",", "")) if m else None
+    except Exception:
+        return None
+
+
 def compute_paper_metadata(c: dict, info: dict, config_sem=None) -> tuple[str, str, str, str, str]:
     """
     Computes (sem, year, season, exam_type, code) to produce:
@@ -256,7 +274,7 @@ def compute_paper_metadata(c: dict, info: dict, config_sem=None) -> tuple[str, s
     # 1. Semester:
     sem_str = "semNA"
     if code != "NOCODE":
-        # In DBATU: BTCOC603 -> 6, BTAIC502 -> 5, 25UD1246PEC507E -> 5
+        # In DBATU: BTCOC603 -> 6, BTAIC502 -> 5, 25UD1246PEC507E -> 5, 24AF2372MD303F -> 3
         m = re.findall(r"[A-Za-z]{2,}([1-8])\d{2}", code)
         if m:
             sem_str = f"sem{m[-1]}"
@@ -292,7 +310,7 @@ def compute_paper_metadata(c: dict, info: dict, config_sem=None) -> tuple[str, s
 
 def resolve_destination(folder: Path, base_name: str, file_hash: str) -> tuple[Path, bool]:
     """
-    Resolves the destination path according to the rule:
+    Resolves destination path adhering to:
         sem-year-sum/win-R/S-Code[-n].pdf
         (-n appears ONLY when more than 1 distinct paper shares the exact same metadata).
 
@@ -364,6 +382,7 @@ def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper", select
     if not repo_label and not select_exam_types:
         return
 
+    before_count = results_count(page)
     print(f"  [filter] Ensuring portal filters are applied (Repository: '{repo_label or 'Any'}')...")
     try:
         toggled = page.evaluate("""(args) => {
@@ -424,9 +443,13 @@ def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper", select
         }""", {"repoLabel": repo_label, "selectExamTypes": select_exam_types})
 
         if toggled:
-            print("  [filter] Filter toggled in portal UI. Waiting for results to refresh...")
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(2000)
+            after_count = results_count(page)
+            if before_count is not None and after_count is not None:
+                print(f"  [filter] Filter active: {after_count} papers available (filtered from {before_count})")
+            else:
+                print("  [filter] Filter toggled in portal UI.")
     except Exception as e:
         print(f"  [filter] Note: UI filter toggle ({e}). Code-level inspection will enforce filters.")
 
@@ -481,28 +504,110 @@ def go_to_page(page, n: int) -> bool:
     return False
 
 
-def get_pdf_url(context, page, read_btn):
+def fetch_pdf(ctx, page, btn) -> tuple[bytes | None, str, str]:
     """
-    Extracts the direct PDF URL from clicking the Read button / opening popup tab.
+    Multi-vector PDF retrieval engine:
+    1. Direct href on the button (fast path).
+    2. Network response listener (application/pdf or .pdf url).
+    3. Browser file download event.
+    4. Popup tab URL (e.g. AWS S3 redirect).
+    5. Embedded viewers (<embed>, <iframe>, <object>, <a href*='.pdf'>).
+    Returns (data_bytes, url_or_source, note).
     """
-    href = read_btn.get_attribute("href")
+    # 1. Direct href fast path
+    href = btn.get_attribute("href")
     if href and (".pdf" in href.lower() or "s3.amazonaws.com" in href.lower()):
-        return href
-
-    try:
-        with context.expect_page(timeout=15000) as pi:
-            read_btn.click()
-        new = pi.value
         try:
-            new.wait_for_url(lambda u: u and u != "about:blank", timeout=15000)
+            resp = ctx.request.get(href)
+            b = resp.body()
+            if b.startswith(b"%PDF"):
+                return b, href, "direct-href"
         except Exception:
             pass
-        url = new.url
-        new.close()
-        return url if url != "about:blank" else None
-    except Exception as e:
-        print(f"    ! popup error: {e}")
-        return None
+
+    # 2. Setup listeners for network responses & file downloads
+    captured, downloads = [], []
+
+    def on_resp(r):
+        try:
+            ct = (r.headers.get("content-type") or "").lower()
+            if "pdf" in ct or r.url.lower().split("?")[0].endswith(".pdf"):
+                captured.append(r)
+        except Exception:
+            pass
+
+    def on_page(pg):
+        pg.on("download", lambda d: downloads.append(d))
+
+    ctx.on("response", on_resp)
+    ctx.on("page", on_page)
+    new_page = None
+    try:
+        try:
+            with ctx.expect_page(timeout=15000) as pi:
+                btn.click()
+            new_page = pi.value
+        except Exception as e:
+            return None, "", f"no popup opened ({str(e)[:60]})"
+
+        # Wait up to 6s for network response or download event
+        for _ in range(12):
+            if captured or downloads:
+                break
+            page.wait_for_timeout(500)
+
+        for r in captured:
+            try:
+                b = r.body()
+                if b.startswith(b"%PDF"):
+                    return b, r.url, "network-response"
+            except Exception:
+                pass
+
+        for d in downloads:
+            try:
+                b = open(d.path(), "rb").read()
+                if b.startswith(b"%PDF"):
+                    return b, d.url, "download-event"
+            except Exception:
+                pass
+
+        # Check popup URL navigation
+        try:
+            new_page.wait_for_url(lambda u: u and u != "about:blank", timeout=6000)
+        except Exception:
+            pass
+        url = new_page.url
+        candidates = [url] if url and url != "about:blank" else []
+
+        # Check embedded iframe/embed/object
+        try:
+            for sel in ("embed[src]", "iframe[src]", "object[data]", "a[href*='.pdf']"):
+                for el in new_page.locator(sel).all()[:3]:
+                    u = el.get_attribute("src") or el.get_attribute("data") or el.get_attribute("href")
+                    if u and u.startswith("http"):
+                        candidates.append(u)
+        except Exception:
+            pass
+
+        for u in candidates:
+            try:
+                resp = ctx.request.get(u)
+                b = resp.body()
+                if b.startswith(b"%PDF"):
+                    return b, u, "page-candidate"
+            except Exception:
+                pass
+
+        return None, url, "no valid PDF bytes"
+    finally:
+        ctx.remove_listener("response", on_resp)
+        ctx.remove_listener("page", on_page)
+        if new_page:
+            try:
+                new_page.close()
+            except Exception:
+                pass
 
 
 # ------------------------------------------------------------------ main
@@ -615,7 +720,7 @@ def main():
                         continue
                     seen_cards.add(card_fingerprint)
 
-                    print(f"    [{i+1}/{n}] '{c['title']}' [{c['code'] or 'NOCODE'}] {c['season'] or ''} {c['year'] or ''} (prog: {c['prog']})")
+                    print(f"    [{i+1}/{n}] '{c['full_title']}' {c['season'] or ''} {c['year'] or ''} (prog: {c['prog']})")
 
                     # 1. Skip Mid-Semester / Class Test papers
                     if c["is_mid_sem"]:
@@ -636,7 +741,7 @@ def main():
                         print(f"      - Skip: year {c['year']} < {since}")
                         continue
 
-                    # 4. Course check from card (e.g. Reject Diploma [23DCE...] when B.Tech is required)
+                    # 4. Course check from card (e.g. Reject Diploma [23DCE...], MCA [MCAC...] when B.Tech is required)
                     if prog_target != "all":
                         if c["prog"] != "unknown" and c["prog"] != prog_target:
                             print(f"      - Skip: non-{prog_target} card (detected: {c['prog']})")
@@ -647,20 +752,19 @@ def main():
                         print(f"      - Skip: code {c['code']} not in whitelist")
                         continue
 
-                    # Fetch PDF URL
-                    try:
-                        url = get_pdf_url(ctx, page, btn)
-                        if not url:
-                            print(f"    ! Could not get PDF URL for '{c['title']}'")
-                            continue
-                        resp = ctx.request.get(url)
-                        data = resp.body()
-                    except Exception as e:
-                        print(f"    ! Fetch error '{c['title']}': {e}")
-                        continue
+                    # 6. Pre-download semester check from course code (saves downloading out-of-range papers)
+                    if allowed and c["code"]:
+                        code_sem_digits = re.findall(r"[A-Za-z]{2,}([1-8])\d{2}", c["code"])
+                        if code_sem_digits:
+                            card_sem = int(code_sem_digits[-1])
+                            if card_sem not in allowed:
+                                print(f"      - Skip: code '{c['code']}' indicates sem {card_sem}, wanted {sorted(allowed)}")
+                                continue
 
-                    if not data.startswith(b"%PDF"):
-                        print(f"    ! Response is not a valid PDF: '{c['title']}'")
+                    # Fetch PDF using multi-vector delivery engine
+                    data, url, note = fetch_pdf(ctx, page, btn)
+                    if not data:
+                        print(f"    ! Could not fetch PDF for '{c['title']}': {note} ({str(url)[:70]})")
                         continue
 
                     h = hashlib.sha256(data).hexdigest()
@@ -683,8 +787,8 @@ def main():
                     code = (info.get("code") or c.get("code") or "NOCODE").upper().strip()
 
                     if prog_target != "all":
-                        # If course code starts with BT, BTECH, or UD...PEC, it is guaranteed B.Tech
-                        if re.search(r"^BT|BTECH|[0-9]{2}UD.*PEC|UD.*PEC|^PEC", code):
+                        # If course code starts with BT, BTECH, or NEP patterns, it is guaranteed B.Tech
+                        if re.search(r"^BT|BTECH|^\d{2}(UD|AF)|UD.*PEC|^PEC", code):
                             pass
                         elif info["programme"] not in (prog_target, "unknown"):
                             print(f"      - Skip PDF: programme '{info['programme']}' does not match target '{prog_target}'")
