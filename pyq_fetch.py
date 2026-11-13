@@ -239,6 +239,68 @@ def slug(s):
     return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
 
 
+def match_subject(sub: dict, query: str) -> bool:
+    """
+    Smart fuzzy matcher for subject queries.
+    Matches exact names, common acronyms (ML, DBMS, ESDMS, TOC, OS, CG),
+    substrings (e.g. 'java', 'cyber', 'distributed'), search terms, and keywords.
+    """
+    q = query.strip().lower()
+    name = (sub.get("name") or "").lower()
+
+    # 1. Exact match
+    if q == name:
+        return True
+
+    # 2. Known abbreviations / Acronym matching
+    known_acronyms = {
+        "ml": "machine learning",
+        "dbms": "database management systems",
+        "esdms": "entrepreneurship skills and digital marketing strategies",
+        "toc": "theory of computations",
+        "os": "operating systems",
+        "cg": "computer graphics",
+        "ai": "artificial intelligence",
+        "aics": "ai in cyber security",
+        "cns": "cryptography and network security",
+        "cn": "computer networks",
+        "bd": "big data",
+        "de": "data engineering",
+        "cdais": "cloud and distributed ai systems",
+    }
+    if known_acronyms.get(q) == name:
+        return True
+
+    # Generated acronym from title words (e.g. "ESDMS" -> "Entrepreneurship Skills and Digital Marketing Strategies")
+    words = [w for w in re.split(r"[\s\-_]+", name) if w]
+    generated_acronym = "".join(w[0] for w in words).lower()
+    if q == generated_acronym:
+        return True
+
+    # 3. Substring match
+    if q in name or (len(q) >= 3 and name in q):
+        return True
+
+    # 4. Search term match
+    search_term = (sub.get("search") or "").lower()
+    if q in search_term or (len(q) >= 3 and search_term in q):
+        return True
+
+    # 5. Keywords match
+    for kw in sub.get("keywords", []):
+        kw_l = kw.lower()
+        if q in kw_l or kw_l in q:
+            return True
+
+    # 6. Word overlap (handles typos/partial phrases like "could and distributed ai systems")
+    q_words = set(re.findall(r"[a-z0-9]+", q)) - {"and", "in", "of", "the", "for", "to"}
+    name_words = set(re.findall(r"[a-z0-9]+", name)) - {"and", "in", "of", "the", "for", "to"}
+    if q_words and name_words and len(q_words & name_words) >= 2:
+        return True
+
+    return False
+
+
 def with_search(base_url, term, branches=None):
     u = urlparse(base_url)
     q = dict(parse_qsl(u.query))
@@ -706,12 +768,42 @@ def main():
     raw_course = args.course if args.course is not None else cfg.get("course", "B.Tech Question Paper")
     repo_label, prog_target = resolve_course(raw_course)
 
+    # Resolve target subjects before launching the browser
+    target_subjects = []
+    if args.only:
+        for sub in cfg.get("subjects", []):
+            if match_subject(sub, args.only):
+                target_subjects.append(sub)
+
+        if not target_subjects:
+            print(f"\n[!] Notice: No exact subject matching '--only \"{args.only}\"' found in {args.config}.")
+            print("    Available subjects in configuration:")
+            for s in cfg.get("subjects", []):
+                print(f"      - {s['name']}")
+            print(f"\n    [+] Creating an ad-hoc subject search for: '{args.only}'")
+            clean_words = [w.lower() for w in args.only.split() if len(w) > 2 and w.lower() not in ("with", "from", "and", "the", "for", "in")]
+            target_subjects = [{
+                "name": args.only.title(),
+                "search": args.only.lower(),
+                "keywords": clean_words or [args.only.lower()],
+                "exclude": [],
+                "sem": 5,
+                "codes": []
+            }]
+    else:
+        target_subjects = cfg.get("subjects", [])
+
     print(f"==================================================")
     print(f" DBATU PYQ Fetcher")
     print(f" Target Course : '{repo_label or 'ALL'}' (key: {prog_target})")
     print(f" Min Year      : {since}")
     print(f" Output Folder : {out}")
     print(f" Naming Format : sem-year-sum/win-R/S-Code[-n].pdf")
+    if args.only:
+        matched_names = [s['name'] for s in target_subjects]
+        print(f" Filter (--only): '{args.only}' -> Matched {len(target_subjects)}: {matched_names}")
+    else:
+        print(f" Subjects Total: {len(target_subjects)}")
     print(f"==================================================")
 
     with sync_playwright() as p:
@@ -726,9 +818,7 @@ def main():
         page.wait_for_load_state("networkidle")
         handle_login(page, cfg, args)
 
-        for sub in cfg["subjects"]:
-            if args.only and args.only.lower() != sub["name"].lower():
-                continue
+        for sub in target_subjects:
 
             sem = sub.get("sem")
             if sem is None or str(sem).lower() in ("any", "all", "none"):
