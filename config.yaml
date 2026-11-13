@@ -1,7 +1,7 @@
 # ---- where PDFs go -------------------------------------------------------
 # Point this at your local or cloud-synced folder
 # Windows example: "G:/My Drive/PYQs"      Mac example: "~/Google Drive/My Drive/PYQs"
-output_dir: "./PYPs/Semester-05/"
+output_dir: "./PYPs/AIML/Semester-05/"
 
 # Question Papers section URL on Knimbus (used as the starting point)
 base_url: "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?sectionId=1ad6bd68-4cc6-4d8b-8550-2203b35075ef&sectionName=QUESTION+PAPERS"
@@ -38,7 +38,8 @@ since_year: 2022
 branches:
   - "Computer Engineering"
   - "Computer Science and Engineering"
-  - "Information Technology"
+  # - "Information Technology"
+  - "Artificial Intelligence and Machine Learning"
 
 max_pages: 15          # safety cap on result pages per subject
 
@@ -56,17 +57,17 @@ subjects:
     sem: 5
     codes: []
 
-  - name: Theory of Computations
-    search: theory of computation
-    keywords: ["theory of computation"]
+  - name: AI in Cyber Security
+    search: cyber security
+    keywords: ["cyber"]
     exclude: []
     sem: 5
     codes: []
 
-  - name: Operating Systems
-    search: operating systems
-    keywords: ["operating system"]
-    exclude: ["advanced"]
+  - name: Entrepreneurship Skills and Digital Marketing Strategies
+    search: entrepreneurship
+    keywords: ["entrepreneurship"]
+    exclude: []
     sem: 5
     codes: []
 
@@ -77,24 +78,24 @@ subjects:
     sem: 5
     codes: []
 
-  - name: Computer Graphics
-    search: computer graphics
-    keywords: ["computer graphics"]
+  - name: Cloud and Distributed AI Systems
+    search: distributed
+    keywords: ["distributed"]
     exclude: []
     sem: 5
     codes: []
 
-  - name: Foundations of Quantum Technologies
-    search: quantum
-    keywords: ["quantum"]
-    exclude: ["mtech", "advanced"]
+  - name: Data Engineering and Big Data
+    search: big data
+    keywords: ["data"]
+    exclude: []
     sem: 5
     codes: []
 
-  - name: Entrepreneurship Skills and Digital Marketing Strategies
-    search: entrepreneurship
-    keywords: ["entrepreneurship"]
-    exclude: []
+  - name: Programming in Java
+    search: java
+    keywords: ["java"]
+    exclude: ["advanced"]
     sem: 5
     codes: []
 
