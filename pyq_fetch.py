@@ -270,6 +270,10 @@ def compute_paper_metadata(c: dict, info: dict, config_sem=None) -> tuple[str, s
     sem-year-sum/win-R(regular)/S(supplymentary)-Code
     """
     code = (info.get("code") or c.get("code") or "NOCODE").upper().strip()
+    # Sanitize characters not allowed in filenames on Windows/Linux (e.g. slashes in dual codes like BTETOE505B/BTEXOE505B)
+    code = re.sub(r'[\\/*?:"<>|]+', "_", code).strip("._- ")
+    if not code:
+        code = "NOCODE"
 
     # 1. Semester:
     sem_str = "semNA"
@@ -785,6 +789,7 @@ def main():
                     # 2. Course verification
                     verdict = "keep"
                     code = (info.get("code") or c.get("code") or "NOCODE").upper().strip()
+                    code = re.sub(r'[\\/*?:"<>|]+', "_", code).strip("._- ") or "NOCODE"
 
                     if prog_target != "all":
                         # If course code starts with BT, BTECH, or NEP patterns, it is guaranteed B.Tech
@@ -821,6 +826,7 @@ def main():
 
                     # Compute requested naming format: sem-year-sum/win-R/S-Code[-n].pdf
                     base_name = f"{sem_str}-{year_str}-{season_str}-{exam_type_str}-{code_str}"
+                    base_name = re.sub(r'[\\/*?:"<>|]+', "_", base_name).strip("._- ")
                     dest, is_dup = resolve_destination(folder, base_name, h)
 
                     if is_dup:
@@ -828,6 +834,7 @@ def main():
                         print(f"      = Duplicate paper content already saved: {dest.name}")
                         continue
 
+                    dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(data)
                     manifest["hashes"][h] = str(dest)
                     kept += 1
