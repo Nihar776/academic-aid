@@ -40,7 +40,7 @@ subjects:
     search: machine learning
     keywords: ["machine learning"]
     exclude: ["advanced", "introduction"]
-    sem: null
+    sem: 5
     codes: []
 
   # - name: DBMS
