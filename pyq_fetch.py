@@ -312,7 +312,7 @@ def with_search(base_url, term, branches=None):
         knimbus_subjects = set()
         for b in branches:
             bl = b.lower()
-            if "computer" in bl or "cse" in bl or "ce" in bl:
+            if "computer" in bl or "cse" in bl or "ce" in bl or "artificial" in bl or "ai" in bl or "aiml" in bl:
                 knimbus_subjects.add("Computer Engineering")
             if "information" in bl or bl.strip() == "it" or " it" in bl:
                 knimbus_subjects.add("Information Technology")
