@@ -357,18 +357,20 @@ def handle_login(page, cfg, args):
     if email and password:
         print(f">>> Auto-logging in with account: {email}...")
         try:
-            page.fill("input#email, input[name='email'], input[type='email']", email)
-            page.fill("input#password, input[name='password'], input[type='password']", password)
-            page.click("button:has-text('Continue')")
+            page.wait_for_selector("input[type='password'], input#password", timeout=10000)
+            page.locator("input[type='email'], input#email, input[name='email'], input[placeholder*='Email']").first.fill(email)
+            page.locator("input[type='password'], input#password, input[name='password'], input[placeholder*='Password']").first.fill(password)
+            page.locator("button:has-text('Continue'), button[type='submit']").first.click()
             page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(3000)
+            page.wait_for_function("() => !location.href.includes('login')", timeout=10000)
+            page.wait_for_timeout(2000)
             if "login" not in page.url:
                 print(">>> Login successful!")
                 return
         except Exception as e:
-            print(f">>> Auto-login attempt error: {e}")
+            print(f">>> Auto-login notice: {e}")
 
-    # Manual login instructions
+    # Manual login instructions if auto-login didn't complete
     print(">>> Log in to the DBATU library in the browser window.")
     print("    Waiting for login to complete...")
     try:
@@ -773,8 +775,10 @@ def main():
 
                     h = hashlib.sha256(data).hexdigest()
                     if h in manifest["hashes"] and manifest["hashes"][h] != "skipped":
-                        print(f"      = Already downloaded: {manifest['hashes'][h]}")
-                        continue
+                        saved_path = Path(manifest["hashes"][h])
+                        if saved_path.exists():
+                            print(f"      = Already downloaded: {manifest['hashes'][h]}")
+                            continue
 
                     # Inspect PDF body
                     text = pdf_first_pages_text(data)

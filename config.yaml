@@ -10,8 +10,8 @@ base_url: "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?se
 # If set, the script can log in automatically even in headless mode.
 # If left empty, run 'python pyq_fetch.py' in your own terminal to log in interactively.
 credentials:
-  email: ""
-  password: ""
+  email: "createlearningforall@gmail.com"
+  password: "Abc@123"
 
 # ---- course / degree filter ----------------------------------------------
 # Target degree/course type. Papers downloaded will match this course.
