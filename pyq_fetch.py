@@ -840,7 +840,11 @@ def main():
                     # Compute requested naming format: sem-year-sum/win-R/S-Code[-n].pdf
                     base_name = f"{sem_str}-{year_str}-{season_str}-{exam_type_str}-{code_str}"
                     base_name = re.sub(r'[\\/*?:"<>|]+', "_", base_name).strip("._- ")
-                    dest, is_dup = resolve_destination(folder, base_name, h)
+                    
+                    # Save into semester-wise subfolder (e.g. Machine_Learning/sem5/)
+                    target_folder = folder / sem_str
+                    target_folder.mkdir(parents=True, exist_ok=True)
+                    dest, is_dup = resolve_destination(target_folder, base_name, h)
 
                     if is_dup:
                         manifest["hashes"][h] = str(dest)
@@ -851,7 +855,7 @@ def main():
                     dest.write_bytes(data)
                     manifest["hashes"][h] = str(dest)
                     kept += 1
-                    print(f"    + [SAVED ] {dest.name}")
+                    print(f"    + [SAVED ] {sem_str}/{dest.name}")
                     manifest_path.write_text(json.dumps(manifest, indent=2))
 
             print(f"  -> Total saved for '{sub['name']}': {kept} paper(s)")
