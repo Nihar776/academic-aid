@@ -380,22 +380,37 @@ def handle_login(page, cfg, args):
         print(f">>> Login wait interrupted: {e}")
 
 
-def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper", select_exam_types: bool = True):
+def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper"):
     """
-    Applies portal filters (Repository, Regular, Supplementary) using direct JavaScript DOM evaluation.
+    Applies portal filters (Repository: B.Tech Question Paper) using direct JavaScript DOM evaluation.
     Immune to sticky footers, closed accordions, and Playwright scroll timeouts.
+    Ensures that Author/Exam-Type is NOT locked to Supplementary, allowing BOTH Regular
+    (Winter/Summer Semester) and Supplementary papers to be retrieved simultaneously.
+    Mid-Semester exams are reliably filtered out by code-level inspection.
     """
-    if not repo_label and not select_exam_types:
+    if not repo_label:
         return
 
     before_count = results_count(page)
     print(f"  [filter] Ensuring portal filters are applied (Repository: '{repo_label or 'Any'}')...")
     try:
         toggled = page.evaluate("""(args) => {
-            const { repoLabel, selectExamTypes } = args;
+            const { repoLabel } = args;
             let changed = false;
 
-            // 1. Expand any collapsed filter sections in the sidebar
+            // 1. Clear any restrictive Author filter that may have been previously applied
+            const appliedFilters = Array.from(document.querySelectorAll(".applied-filters, [class*='applied'], [class*='filter-tag'], li, span"));
+            for (const el of appliedFilters) {
+                const t = el.textContent.trim().toLowerCase();
+                if (t.includes("author:") || t.includes("supplementary") || t.includes("winter semester") || t.includes("summer semester")) {
+                    const removeBtn = el.querySelector("a, button, .close, [class*='close'], [class*='remove'], i");
+                    if (removeBtn) {
+                        try { removeBtn.click(); changed = true; } catch(e) {}
+                    }
+                }
+            }
+
+            // 2. Expand any collapsed filter sections in the sidebar
             const headers = Array.from(document.querySelectorAll("*")).filter(el => {
                 const t = el.textContent.trim();
                 return (t.startsWith("REPOSITORY") || t.startsWith("SEMESTER") || t.startsWith("COURSE")) && el.children.length <= 2;
@@ -430,7 +445,7 @@ def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper", select
                 return false;
             };
 
-            // 2. Select Repository (e.g. B.Tech Question Paper)
+            // 3. Select Repository (e.g. B.Tech Question Paper)
             if (repoLabel) {
                 const applied = Array.from(document.querySelectorAll(".applied-filters, [class*='applied'], [class*='filter-tag']"));
                 const alreadyActive = applied.some(a => a.textContent.toLowerCase().includes(repoLabel.toLowerCase()));
@@ -439,14 +454,8 @@ def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper", select
                 }
             }
 
-            // 3. Select Regular and Supplementary if available in UI filters
-            if (selectExamTypes) {
-                checkOption(/^regular\\b/i);
-                checkOption(/^supplementary\\b/i);
-            }
-
             return changed;
-        }""", {"repoLabel": repo_label, "selectExamTypes": select_exam_types})
+        }""", {"repoLabel": repo_label})
 
         if toggled:
             page.wait_for_load_state("networkidle")
@@ -690,8 +699,8 @@ def main():
                 page.goto(with_search(cfg["base_url"], sub["search"]))
                 page.wait_for_load_state("networkidle")
 
-            # Apply UI portal filters (Repository: B.Tech, Exam Type: Regular/Supplementary)
-            apply_portal_filters(page, repo_label, select_exam_types=True)
+            # Apply UI portal filters (Repository: B.Tech Question Paper)
+            apply_portal_filters(page, repo_label)
 
             seen_cards, kept = set(), 0
             max_pages = cfg.get("max_pages", 15)
