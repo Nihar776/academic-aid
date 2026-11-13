@@ -301,23 +301,16 @@ def match_subject(sub: dict, query: str) -> bool:
     return False
 
 
-def with_search(base_url, term, branches=None):
+def with_search(base_url, term, subject_filter=None):
     u = urlparse(base_url)
     q = dict(parse_qsl(u.query))
     q.pop("curPage", None)
     q.pop("search_within", None)
     q.pop("sub_category_name", None)
     qs = urlencode(q) + "&curPage=1&search_within=" + quote(quote(term))  # Knimbus double-encodes search_within
-    if branches:
-        knimbus_subjects = set()
-        for b in branches:
-            bl = b.lower()
-            if "computer" in bl or "cse" in bl or "ce" in bl or "artificial" in bl or "ai" in bl or "aiml" in bl:
-                knimbus_subjects.add("Computer Engineering")
-            if "information" in bl or bl.strip() == "it" or " it" in bl:
-                knimbus_subjects.add("Information Technology")
-        if knimbus_subjects:
-            qs += "&sub_category_name=" + quote(",".join(sorted(knimbus_subjects)))
+    if subject_filter and str(subject_filter).lower() not in ("none", "null", "false", ""):
+        knimbus_subjects = subject_filter if isinstance(subject_filter, list) else [subject_filter]
+        qs += "&sub_category_name=" + quote(",".join(sorted(knimbus_subjects)))
     return urlunparse(u._replace(query=qs))
 
 
@@ -485,63 +478,54 @@ def handle_login(page, cfg, args):
         print(f">>> Login wait interrupted: {e}")
 
 
-def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper", branches: list[str] | None = None):
+def apply_portal_filters(page, filters_cfg: dict):
     """
-    Applies portal filters (Repository: B.Tech Question Paper, Subject: Branches)
-    using direct JavaScript DOM evaluation.
-    Immune to sticky footers, closed accordions, and Playwright scroll timeouts.
-    Ensures that Author/Exam-Type is NOT locked to Supplementary, allowing BOTH Regular
-    (Winter/Summer Semester) and Supplementary papers to be retrieved simultaneously.
-    Mid-Semester exams are reliably filtered out by code-level inspection.
+    Applies portal filters according to configuration:
+    - repository: "B.Tech Question Paper" [default]
+    - subject: None (avoids restrictive portal subject locks; Python code handles branch filtering)
+    - publication_year: from config.yaml
+    - year: from config.yaml
+    - dept: from config.yaml
+    - course: from config.yaml
+    - author: ["supplementary", "summer", "winter"]
     """
-    if not repo_label and not branches:
-        return
+    repo = filters_cfg.get("repository") or "B.Tech Question Paper"
+    authors = filters_cfg.get("author") or ["supplementary", "summer", "winter"]
+    sub = filters_cfg.get("subject")
 
     before_count = results_count(page)
-    print(f"  [filter] Ensuring portal filters are applied (Repository: '{repo_label or 'Any'}')...")
+    print(f"  [filter] Applying portal filters (Repository: '{repo}', Subject: {sub}, Author: {authors})...")
     try:
-        toggled = page.evaluate("""(args) => {
-            const { repoLabel, branches } = args;
+        toggled = page.evaluate("""(filters) => {
             let changed = false;
 
-            // 1. Clear any restrictive Author filter that may have been previously applied
-            const appliedFilters = Array.from(document.querySelectorAll(".applied-filters, [class*='applied'], [class*='filter-tag'], li, span"));
-            for (const el of appliedFilters) {
-                const t = el.textContent.trim().toLowerCase();
-                if (t.includes("author:") || t.includes("supplementary") || t.includes("winter semester") || t.includes("summer semester")) {
-                    const removeBtn = el.querySelector("a, button, .close, [class*='close'], [class*='remove'], i");
-                    if (removeBtn) {
-                        try { removeBtn.click(); changed = true; } catch(e) {}
-                    }
-                }
-            }
-
-            // 2. Expand any collapsed filter sections in the sidebar
+            // 1. Expand any collapsed filter sections in the sidebar
             const headers = Array.from(document.querySelectorAll("*")).filter(el => {
-                const t = el.textContent.trim();
-                return (t.startsWith("REPOSITORY") || t.startsWith("SEMESTER") || t.startsWith("SUBJECT") || t.startsWith("COURSE")) && el.children.length <= 2;
+                const t = el.textContent.trim().toUpperCase();
+                return (t.startsWith("REPOSITORY") || t.startsWith("SEMESTER") || t.startsWith("SUBJECT") || 
+                        t.startsWith("COURSE") || t.startsWith("AUTHOR") || t.startsWith("PUBLICATION YEAR") || 
+                        t.startsWith("YEAR") || t.startsWith("DEPARTMENT") || t.startsWith("DEPT")) && el.children.length <= 2;
             });
             for (const h of headers) {
                 try { h.click(); } catch(e) {}
             }
 
             // Helper to find and check checkbox or element
-            const checkOption = (labelPattern) => {
-                const elements = Array.from(document.querySelectorAll("label, span, a, li, div"));
+            const checkOption = (labelPattern, sectionHint = null) => {
+                let elements = Array.from(document.querySelectorAll("label, span, a, li, div"));
+                if (sectionHint) {
+                    const sec = elements.filter(el => {
+                        const t = el.closest(".panel, .card, .filter-group, [class*='filter'], [class*='accordion'], div")?.textContent || "";
+                        return new RegExp(sectionHint, "i").test(t);
+                    });
+                    if (sec.length > 0) elements = sec;
+                }
                 for (const el of elements) {
                     if (labelPattern.test(el.textContent.trim())) {
-                        const cb = el.querySelector("input[type='checkbox']") || (el.tagName === 'INPUT' ? el : null);
+                        const cb = el.querySelector("input[type='checkbox']") || (el.tagName === 'INPUT' ? el : null) || el.closest("label")?.querySelector("input[type='checkbox']");
                         if (cb) {
                             if (!cb.checked) {
                                 cb.click();
-                                changed = true;
-                            }
-                            return true;
-                        }
-                        const parentCb = el.closest("label")?.querySelector("input[type='checkbox']");
-                        if (parentCb) {
-                            if (!parentCb.checked) {
-                                parentCb.click();
                                 changed = true;
                             }
                             return true;
@@ -551,31 +535,78 @@ def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper", branch
                 return false;
             };
 
-            // 3. Select Repository (e.g. B.Tech Question Paper)
-            if (repoLabel) {
+            // 1. REPOSITORY (default: "B.Tech Question Paper")
+            const repo = filters.repository || "B.Tech Question Paper";
+            if (repo && repo.toLowerCase() !== "all" && repo.toLowerCase() !== "none") {
                 const applied = Array.from(document.querySelectorAll(".applied-filters, [class*='applied'], [class*='filter-tag']"));
-                const alreadyActive = applied.some(a => a.textContent.toLowerCase().includes(repoLabel.toLowerCase()));
+                const alreadyActive = applied.some(a => a.textContent.toLowerCase().includes(repo.toLowerCase()));
                 if (!alreadyActive) {
-                    checkOption(new RegExp(repoLabel.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), "i"));
+                    checkOption(new RegExp(repo.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), "i"), "REPOSITORY");
                 }
             }
 
-            // 4. Select Branches under SUBJECT if not already active in URL
-            if (branches && branches.length > 0) {
-                const appliedText = Array.from(document.querySelectorAll(".applied-filters, [class*='applied'], [class*='filter-tag']")).map(a => a.textContent).join(" ");
-                for (const b of branches) {
-                    const bl = b.toLowerCase();
-                    let targetLabel = null;
-                    if (bl.includes("computer") || bl.includes("cse")) targetLabel = /^Computer Engineering\\s*\\(/i;
-                    else if (bl.includes("information") || bl.includes("it")) targetLabel = /^Information Technology\\s*\\(/i;
-                    if (targetLabel && !appliedText.includes("Computer Engineering") && !appliedText.includes("Information Technology")) {
-                        checkOption(targetLabel);
+            // 2. SUBJECT (None by default - do NOT check any SUBJECT checkbox unless explicitly specified and not None)
+            const sub = filters.subject;
+            if (sub && String(sub).toLowerCase() !== "none" && String(sub).toLowerCase() !== "null") {
+                const subList = Array.isArray(sub) ? sub : [sub];
+                for (const s of subList) {
+                    checkOption(new RegExp(s, "i"), "SUBJECT");
+                }
+            }
+
+            // 3. PUBLICATION YEAR (from config.yaml)
+            const pubYear = filters.publication_year;
+            if (pubYear && String(pubYear).toLowerCase() !== "none" && String(pubYear).toLowerCase() !== "null") {
+                const pyList = Array.isArray(pubYear) ? pubYear : [pubYear];
+                for (const py of pyList) {
+                    checkOption(new RegExp(`^${py}\\\\b`), "PUBLICATION YEAR");
+                }
+            }
+
+            // 4. YEAR (from config.yaml)
+            const yr = filters.year;
+            if (yr && String(yr).toLowerCase() !== "none" && String(yr).toLowerCase() !== "null") {
+                const yList = Array.isArray(yr) ? yr : [yr];
+                for (const y of yList) {
+                    checkOption(new RegExp(`^${y}\\\\b`), "YEAR");
+                }
+            }
+
+            // 5. DEPT (from config.yaml)
+            const dept = filters.dept;
+            if (dept && String(dept).toLowerCase() !== "none" && String(dept).toLowerCase() !== "null") {
+                const dList = Array.isArray(dept) ? dept : [dept];
+                for (const d of dList) {
+                    checkOption(new RegExp(d, "i"), "DEPT");
+                }
+            }
+
+            // 6. COURSE (from config.yaml)
+            const crs = filters.course;
+            if (crs && String(crs).toLowerCase() !== "none" && String(crs).toLowerCase() !== "null") {
+                const cList = Array.isArray(crs) ? crs : [crs];
+                for (const c of cList) {
+                    checkOption(new RegExp(c, "i"), "COURSE");
+                }
+            }
+
+            // 7. AUTHOR (supplementary, summer, winter)
+            const authors = filters.author || ["supplementary", "summer", "winter"];
+            if (authors && Array.isArray(authors) && authors.length > 0) {
+                for (const a of authors) {
+                    const al = String(a).toLowerCase();
+                    if (al.includes("suppl")) {
+                        checkOption(/^Supplementary\\\\b/i, "AUTHOR");
+                    } else if (al.includes("summer")) {
+                        checkOption(/^Summer(\\\\s+Semester)?\\\\b/i, "AUTHOR");
+                    } else if (al.includes("winter")) {
+                        checkOption(/^Winter(\\\\s+Semester)?\\\\b/i, "AUTHOR");
                     }
                 }
             }
 
             return changed;
-        }""", {"repoLabel": repo_label, "branches": branches})
+        }""", filters_cfg)
 
         if toggled:
             page.wait_for_load_state("networkidle")
@@ -749,7 +780,7 @@ def fetch_pdf(ctx, page, btn) -> tuple[bytes | None, str, str]:
 def main():
     ap = argparse.ArgumentParser(description="Bulk-download DBATU previous year question papers from Knimbus.")
     ap.add_argument("--config", default="config.yaml", help="Path to config.yaml")
-    ap.add_argument("--only", help="Run only for a specific subject name")
+    ap.add_argument("--only", nargs="+", action="extend", help="Run only for specific subject(s). Can pass multiple names, acronyms, or comma-separated (e.g. --only ML DBMS or --only ML,DBMS)")
     ap.add_argument("--course", help="Target course/degree type (e.g. 'B.Tech', 'Diploma', 'M.Tech', 'Pharmacy', 'all')")
     ap.add_argument("--email", help="Knimbus login email (for automated headless login)")
     ap.add_argument("--password", help="Knimbus login password")
@@ -764,32 +795,51 @@ def main():
     manifest_path = out / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"hashes": {}, "keys": {}}
 
-    # Determine course type (CLI argument overrides config.yaml, defaults to 'B.Tech Question Paper')
-    raw_course = args.course if args.course is not None else cfg.get("course", "B.Tech Question Paper")
+    # Detailed portal filter configuration from config.yaml
+    cfg_filters = cfg.get("filters", {}) or {}
+    raw_course = args.course if args.course is not None else (cfg_filters.get("repository") or cfg.get("course", "B.Tech Question Paper"))
     repo_label, prog_target = resolve_course(raw_course)
 
-    # Resolve target subjects before launching the browser
+    filters_cfg = {
+        "repository": repo_label or "B.Tech Question Paper",
+        "subject": cfg_filters.get("subject", None),
+        "publication_year": cfg_filters.get("publication_year", None),
+        "year": cfg_filters.get("year", None),
+        "dept": cfg_filters.get("dept", None),
+        "course": cfg_filters.get("course", None),
+        "author": cfg_filters.get("author", ["supplementary", "summer", "winter"]),
+    }
+
+    # Resolve target subjects before launching the browser (supports multiple subjects in --only)
     target_subjects = []
     if args.only:
-        for sub in cfg.get("subjects", []):
-            if match_subject(sub, args.only):
-                target_subjects.append(sub)
+        raw_queries = []
+        for item in args.only:
+            for part in item.split(","):
+                p = part.strip()
+                if p:
+                    raw_queries.append(p)
 
-        if not target_subjects:
-            print(f"\n[!] Notice: No exact subject matching '--only \"{args.only}\"' found in {args.config}.")
-            print("    Available subjects in configuration:")
-            for s in cfg.get("subjects", []):
-                print(f"      - {s['name']}")
-            print(f"\n    [+] Creating an ad-hoc subject search for: '{args.only}'")
-            clean_words = [w.lower() for w in args.only.split() if len(w) > 2 and w.lower() not in ("with", "from", "and", "the", "for", "in")]
-            target_subjects = [{
-                "name": args.only.title(),
-                "search": args.only.lower(),
-                "keywords": clean_words or [args.only.lower()],
-                "exclude": [],
-                "sem": 5,
-                "codes": []
-            }]
+        seen_sub_names = set()
+        for q in raw_queries:
+            matched = [s for s in cfg.get("subjects", []) if match_subject(s, q) and s["name"] not in seen_sub_names]
+            if matched:
+                for m in matched:
+                    target_subjects.append(m)
+                    seen_sub_names.add(m["name"])
+            else:
+                print(f"\n[!] Notice: No exact subject matching '--only \"{q}\"' found in {args.config}.")
+                print(f"    [+] Creating an ad-hoc subject search for: '{q}'")
+                clean_words = [w.lower() for w in q.split() if len(w) > 2 and w.lower() not in ("with", "from", "and", "the", "for", "in")]
+                target_subjects.append({
+                    "name": q.title(),
+                    "search": q.lower(),
+                    "keywords": clean_words or [q.lower()],
+                    "exclude": [],
+                    "sem": 5,
+                    "codes": []
+                })
+                seen_sub_names.add(q.title())
     else:
         target_subjects = cfg.get("subjects", [])
 
@@ -801,7 +851,7 @@ def main():
     print(f" Naming Format : sem-year-sum/win-R/S-Code[-n].pdf")
     if args.only:
         matched_names = [s['name'] for s in target_subjects]
-        print(f" Filter (--only): '{args.only}' -> Matched {len(target_subjects)}: {matched_names}")
+        print(f" Filter (--only): {args.only} -> Matched {len(target_subjects)}: {matched_names}")
     else:
         print(f" Subjects Total: {len(target_subjects)}")
     print(f"==================================================")
@@ -832,26 +882,46 @@ def main():
             kws = [k.lower() for k in sub.get("keywords", [])]
             exc = [e.lower() for e in sub.get("exclude", [])]
             codes = {c.upper() for c in sub.get("codes", [])}
-            folder = out / slug(sub["name"])
-            folder.mkdir(exist_ok=True)
+
+            # Dedicated address for subject, or fallback to general repo
+            sub_addr = sub.get("output_dir") or sub.get("address") or sub.get("folder") or sub.get("path") or sub.get("repo")
+            if sub_addr:
+                folder = Path(sub_addr).expanduser()
+            else:
+                folder = out / slug(sub["name"])
+            folder.mkdir(parents=True, exist_ok=True)
+
+            sub_manifest_path = folder / "manifest.json"
+            if sub_manifest_path.exists():
+                try:
+                    sub_manifest = json.loads(sub_manifest_path.read_text())
+                except Exception:
+                    sub_manifest = {"hashes": {}, "keys": {}}
+            else:
+                sub_manifest = {"hashes": {}, "keys": {}}
 
             branches = sub.get("branches") or cfg.get("branches")
             print(f"\n=== Subject: {sub['name']} ===")
+            if sub_addr:
+                print(f"    Dedicated Address: {folder}")
+            else:
+                print(f"    Target Folder    : {folder}")
             if allowed:
                 print(f"    Allowed Semesters: {sorted(allowed)}")
             if branches:
                 print(f"    Target Branches  : {branches}")
             print(f"    Search Query     : '{sub['search']}'")
 
-            page.goto(with_search(cfg["base_url"], sub["search"], branches))
+            search_url = with_search(cfg["base_url"], sub["search"], filters_cfg.get("subject"))
+            page.goto(search_url)
             page.wait_for_load_state("networkidle")
             if "login" in page.url:
                 handle_login(page, cfg, args)
-                page.goto(with_search(cfg["base_url"], sub["search"], branches))
+                page.goto(search_url)
                 page.wait_for_load_state("networkidle")
 
-            # Apply UI portal filters (Repository: B.Tech Question Paper, Subject: Branches)
-            apply_portal_filters(page, repo_label, branches)
+            # Apply UI portal filters according to detailed config
+            apply_portal_filters(page, filters_cfg)
 
             seen_cards, kept = set(), 0
             max_pages = cfg.get("max_pages", 15)
@@ -941,10 +1011,15 @@ def main():
                         continue
 
                     h = hashlib.sha256(data).hexdigest()
-                    if h in manifest["hashes"] and manifest["hashes"][h] != "skipped":
+                    if h in sub_manifest.get("hashes", {}) and sub_manifest["hashes"][h] != "skipped":
+                        saved_path = Path(sub_manifest["hashes"][h])
+                        if saved_path.exists():
+                            print(f"      = Already downloaded: {saved_path.name}")
+                            continue
+                    if h in manifest.get("hashes", {}) and manifest["hashes"][h] != "skipped":
                         saved_path = Path(manifest["hashes"][h])
                         if saved_path.exists():
-                            print(f"      = Already downloaded: {manifest['hashes'][h]}")
+                            print(f"      = Already downloaded: {saved_path.name}")
                             continue
 
                     # Inspect PDF body
@@ -954,6 +1029,7 @@ def main():
                     # 1. Mid-Semester verification from PDF
                     if info["is_mid_sem"]:
                         print(f"      - Skip PDF: Mid-Semester examination detected")
+                        sub_manifest["hashes"][h] = "skipped"
                         manifest["hashes"][h] = "skipped"
                         continue
 
@@ -999,6 +1075,7 @@ def main():
                             verdict = "skip"
 
                     if verdict == "skip":
+                        sub_manifest["hashes"][h] = "skipped"
                         manifest["hashes"][h] = "skipped"
                         continue
 
@@ -1006,23 +1083,27 @@ def main():
                     base_name = f"{sem_str}-{year_str}-{season_str}-{exam_type_str}-{code_str}"
                     base_name = re.sub(r'[\\/*?:"<>|]+', "_", base_name).strip("._- ")
                     
-                    # Save into semester-wise subfolder (e.g. Machine_Learning/sem5/)
+                    # Save into semester-wise subfolder (e.g. Dedicated/sem5/ or Machine_Learning/sem5/)
                     target_folder = folder / sem_str
                     target_folder.mkdir(parents=True, exist_ok=True)
                     dest, is_dup = resolve_destination(target_folder, base_name, h)
 
                     if is_dup:
+                        sub_manifest["hashes"][h] = str(dest)
                         manifest["hashes"][h] = str(dest)
                         print(f"      = Duplicate paper content already saved: {dest.name}")
                         continue
 
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(data)
+                    sub_manifest["hashes"][h] = str(dest)
                     manifest["hashes"][h] = str(dest)
                     kept += 1
                     print(f"    + [SAVED ] {sem_str}/{dest.name}")
+                    sub_manifest_path.write_text(json.dumps(sub_manifest, indent=2))
                     manifest_path.write_text(json.dumps(manifest, indent=2))
 
+            sub_manifest_path.write_text(json.dumps(sub_manifest, indent=2))
             print(f"  -> Total saved for '{sub['name']}': {kept} paper(s)")
 
         manifest_path.write_text(json.dumps(manifest, indent=2))

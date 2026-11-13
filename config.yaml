@@ -27,6 +27,20 @@ course: "B.Tech Question Paper"
 # Last years -> exam year must be >= this (e.g. 2022..2026)
 since_year: 2022
 
+# ---- portal filters ------------------------------------------------------
+# Detailed portal filters applied to Knimbus sidebar facets:
+filters:
+  repository: "B.Tech Question Paper"   # [default]
+  subject: null                         # None (avoids restrictive portal locks; code-level filter handles branches)
+  publication_year: null                # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
+  year: null                            # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
+  dept: null                            # from config.yaml (e.g. null or ["Computer Engineering"])
+  course: null                          # from config.yaml (e.g. null)
+  author:                               # supplementary, summer, winter
+    - "supplementary"
+    - "summer"
+    - "winter"
+
 # ---- branch / discipline filter ------------------------------------------
 # Narrow papers down to specific branches/disciplines.
 # Matches Knimbus SUBJECT filter and DBATU course codes.
@@ -44,11 +58,12 @@ branches:
 max_pages: 15          # safety cap on result pages per subject
 
 # ---- subjects ------------------------------------------------------------
-# search   : query typed in Knimbus "search within results"
-# keywords : ALL must appear in the card title
-# exclude  : if ANY appears in title, paper is skipped (e.g. "advanced" to drop "Advanced Machine Learning")
-# sem      : target semester (e.g. 5, [5, 6], or null to accept all semesters)
-# codes    : optional list of course codes (leave [] to accept all codes)
+# search     : query typed in Knimbus "search within results"
+# keywords   : ALL must appear in the card title
+# exclude    : if ANY appears in title, paper is skipped (e.g. "advanced" to drop "Advanced Machine Learning")
+# sem        : target semester (e.g. 5, [5, 6], or null to accept all semesters)
+# codes      : optional list of course codes (leave [] to accept all codes)
+# output_dir : optional dedicated folder for this subject (if omitted, uses general output_dir at start)
 subjects:
   - name: Machine Learning
     search: machine learning

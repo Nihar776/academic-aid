@@ -92,11 +92,25 @@ course: "B.Tech Question Paper"
 # Filter out older question papers (>= since_year)
 since_year: 2022
 
+# ---- portal filters ------------------------------------------------------
+# Detailed portal filters applied to Knimbus sidebar facets:
+filters:
+  repository: "B.Tech Question Paper"   # [default] B.Tech Question Paper
+  subject: null                         # None (avoids restrictive portal locks; code-level filter handles branches)
+  publication_year: null                # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
+  year: null                            # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
+  dept: null                            # from config.yaml (e.g. null or ["Computer Engineering"])
+  course: null                          # from config.yaml (e.g. null)
+  author:                               # supplementary, summer, winter
+    - "supplementary"
+    - "summer"
+    - "winter"
+
 # Target branches to download (leave [] for all branches)
 branches:
   - "Computer Engineering"
   - "Computer Science and Engineering"
-  - "Information Technology"
+  - "Artificial Intelligence and Machine Learning"
 
 # Max result pages to crawl per subject
 max_pages: 15
@@ -105,14 +119,15 @@ max_pages: 15
 subjects:
   - name: Machine Learning
     search: machine learning
+    # output_dir: "D:/My Drive/ML_PYQs"  # Optional dedicated address (if omitted, uses general output_dir)
     keywords: ["machine learning"]
     exclude: ["advanced", "introduction"]
     sem: 5
     codes: []
 
-  - name: Theory of Computations
-    search: theory of computation
-    keywords: ["theory of computation"]
+  - name: AI in Cyber Security
+    search: cyber security
+    keywords: ["cyber"]
     exclude: []
     sem: 5
     codes: []
@@ -128,6 +143,7 @@ subjects:
 ### Subject Configuration Options:
 - `name`: Human-readable subject name (used for folder naming).
 - `search`: Keyword string typed into Knimbus "Search within results".
+- `output_dir`: *(Optional)* Dedicated folder address for this specific subject. If specified, PDFs are downloaded and organized into `sem5/` inside this dedicated directory. If omitted, uses the general `output_dir` at the top of `config.yaml`.
 - `keywords`: Keywords that **must** appear in the card title.
 - `exclude`: Discard paper if **any** of these terms appear in the title (e.g. `advanced`).
 - `sem`: Target semester (`5`, `[5, 6]`, or `null` for any semester).
@@ -150,10 +166,17 @@ Runs silently in the background without opening a visible browser window:
 python pyq_fetch.py --headless
 ```
 
-### 3. Fetch for a Single Subject
-Fetch papers for only one subject from `config.yaml`:
+### 3. Fetch for Specific Subject(s) (`--only`)
+Fetch papers for one or multiple subjects using full names, acronyms, or comma-separated lists:
 ```bash
-python pyq_fetch.py --only "Machine Learning"
+# By acronym or short name:
+python pyq_fetch.py --only ML
+python pyq_fetch.py --only DBMS
+
+# Multiple subjects at once:
+python pyq_fetch.py --only ML DBMS
+python pyq_fetch.py --only ML,DBMS,cyber
+python pyq_fetch.py --only "AI in Cyber Security" "Machine Learning"
 ```
 
 ### 4. Override Degree / Course Filter
