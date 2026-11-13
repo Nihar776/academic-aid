@@ -239,13 +239,56 @@ def slug(s):
     return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
 
 
-def with_search(base_url, term):
+def with_search(base_url, term, branches=None):
     u = urlparse(base_url)
     q = dict(parse_qsl(u.query))
     q.pop("curPage", None)
     q.pop("search_within", None)
+    q.pop("sub_category_name", None)
     qs = urlencode(q) + "&curPage=1&search_within=" + quote(quote(term))  # Knimbus double-encodes search_within
+    if branches:
+        knimbus_subjects = set()
+        for b in branches:
+            bl = b.lower()
+            if "computer" in bl or "cse" in bl or "ce" in bl:
+                knimbus_subjects.add("Computer Engineering")
+            if "information" in bl or bl.strip() == "it" or " it" in bl:
+                knimbus_subjects.add("Information Technology")
+        if knimbus_subjects:
+            qs += "&sub_category_name=" + quote(",".join(sorted(knimbus_subjects)))
     return urlunparse(u._replace(query=qs))
+
+
+def is_allowed_branch(code: str, card_or_pdf_text: str, branches: list[str] | None) -> tuple[bool, str]:
+    """
+    Checks if a course code or paper text belongs to the allowed branches
+    (e.g. Computer Engineering, Computer Science and Engineering, Information Technology).
+    Returns (is_allowed, reason).
+    """
+    if not branches:
+        return True, "no branch filter configured"
+
+    c = (code or "").upper().strip()
+
+    # 1. Non-computer / non-IT prefixes in DBATU:
+    # BTAR = Automation & Robotics, BTEC = Electronics & Comm, BTET = Electronics & Telecom,
+    # BTEX = Electronics, BTVT = VLSI, BTME = Mechanical, BTCE = Civil, BTCH = Chemical, BTEE = Electrical
+    if re.search(r"^(BTAR|BTEC|BTET|BTEX|BTVT|BTME|BTCE|BTCH|BTEE)", c):
+        return False, f"code prefix '{c[:4]}' is non-CS/IT"
+
+    # 2. Computer / IT prefix in DBATU:
+    # BTCOC/BTCOE = Computer Eng, BTCSD/BTCSE = Computer Science, BTIT/BTITOE = IT, BTAIC = AI/Data Science (CSE allied)
+    if re.search(r"^(BTCOC|BTCOE|BTCO|BTCSD|BTCSE|BTCS|BTIT|BTITOE|BTAIC|BTAI)", c):
+        return True, f"code prefix '{c[:4]}' matches CS/IT"
+
+    # 3. Text analysis from card or PDF header
+    low = (card_or_pdf_text or "").lower()
+    if any(b in low for b in ("robotics", "automation and robotics", "electronics and telecommunication", "vlsi design", "mechanical engineering", "civil engineering", "chemical engineering")):
+        return False, "text indicates non-CS/IT branch"
+    if any(b in low for b in ("computer engineering", "computer science", "information technology", "artificial intelligence")):
+        return True, "text indicates CS/IT branch"
+
+    return True, "accepted by default"
 
 
 def dump(page, name):
@@ -380,22 +423,23 @@ def handle_login(page, cfg, args):
         print(f">>> Login wait interrupted: {e}")
 
 
-def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper"):
+def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper", branches: list[str] | None = None):
     """
-    Applies portal filters (Repository: B.Tech Question Paper) using direct JavaScript DOM evaluation.
+    Applies portal filters (Repository: B.Tech Question Paper, Subject: Branches)
+    using direct JavaScript DOM evaluation.
     Immune to sticky footers, closed accordions, and Playwright scroll timeouts.
     Ensures that Author/Exam-Type is NOT locked to Supplementary, allowing BOTH Regular
     (Winter/Summer Semester) and Supplementary papers to be retrieved simultaneously.
     Mid-Semester exams are reliably filtered out by code-level inspection.
     """
-    if not repo_label:
+    if not repo_label and not branches:
         return
 
     before_count = results_count(page)
     print(f"  [filter] Ensuring portal filters are applied (Repository: '{repo_label or 'Any'}')...")
     try:
         toggled = page.evaluate("""(args) => {
-            const { repoLabel } = args;
+            const { repoLabel, branches } = args;
             let changed = false;
 
             // 1. Clear any restrictive Author filter that may have been previously applied
@@ -413,7 +457,7 @@ def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper"):
             // 2. Expand any collapsed filter sections in the sidebar
             const headers = Array.from(document.querySelectorAll("*")).filter(el => {
                 const t = el.textContent.trim();
-                return (t.startsWith("REPOSITORY") || t.startsWith("SEMESTER") || t.startsWith("COURSE")) && el.children.length <= 2;
+                return (t.startsWith("REPOSITORY") || t.startsWith("SEMESTER") || t.startsWith("SUBJECT") || t.startsWith("COURSE")) && el.children.length <= 2;
             });
             for (const h of headers) {
                 try { h.click(); } catch(e) {}
@@ -454,8 +498,22 @@ def apply_portal_filters(page, repo_label: str = "B.Tech Question Paper"):
                 }
             }
 
+            // 4. Select Branches under SUBJECT if not already active in URL
+            if (branches && branches.length > 0) {
+                const appliedText = Array.from(document.querySelectorAll(".applied-filters, [class*='applied'], [class*='filter-tag']")).map(a => a.textContent).join(" ");
+                for (const b of branches) {
+                    const bl = b.toLowerCase();
+                    let targetLabel = null;
+                    if (bl.includes("computer") || bl.includes("cse")) targetLabel = /^Computer Engineering\\s*\\(/i;
+                    else if (bl.includes("information") || bl.includes("it")) targetLabel = /^Information Technology\\s*\\(/i;
+                    if (targetLabel && !appliedText.includes("Computer Engineering") && !appliedText.includes("Information Technology")) {
+                        checkOption(targetLabel);
+                    }
+                }
+            }
+
             return changed;
-        }""", {"repoLabel": repo_label})
+        }""", {"repoLabel": repo_label, "branches": branches})
 
         if toggled:
             page.wait_for_load_state("networkidle")
@@ -687,20 +745,23 @@ def main():
             folder = out / slug(sub["name"])
             folder.mkdir(exist_ok=True)
 
+            branches = sub.get("branches") or cfg.get("branches")
             print(f"\n=== Subject: {sub['name']} ===")
             if allowed:
                 print(f"    Allowed Semesters: {sorted(allowed)}")
+            if branches:
+                print(f"    Target Branches  : {branches}")
             print(f"    Search Query     : '{sub['search']}'")
 
-            page.goto(with_search(cfg["base_url"], sub["search"]))
+            page.goto(with_search(cfg["base_url"], sub["search"], branches))
             page.wait_for_load_state("networkidle")
             if "login" in page.url:
                 handle_login(page, cfg, args)
-                page.goto(with_search(cfg["base_url"], sub["search"]))
+                page.goto(with_search(cfg["base_url"], sub["search"], branches))
                 page.wait_for_load_state("networkidle")
 
-            # Apply UI portal filters (Repository: B.Tech Question Paper)
-            apply_portal_filters(page, repo_label)
+            # Apply UI portal filters (Repository: B.Tech Question Paper, Subject: Branches)
+            apply_portal_filters(page, repo_label, branches)
 
             seen_cards, kept = set(), 0
             max_pages = cfg.get("max_pages", 15)
@@ -776,6 +837,13 @@ def main():
                                 print(f"      - Skip: code '{c['code']}' indicates sem {card_sem}, wanted {sorted(allowed)}")
                                 continue
 
+                    # 7. Pre-download branch check from course code and card text
+                    if branches:
+                        allowed_branch, branch_reason = is_allowed_branch(c["code"], ctext, branches)
+                        if not allowed_branch:
+                            print(f"      - Skip: {branch_reason} (code: '{c['code']}')")
+                            continue
+
                     # Fetch PDF using multi-vector delivery engine
                     data, url, note = fetch_pdf(ctx, page, btn)
                     if not data:
@@ -832,6 +900,13 @@ def main():
                     if verdict == "keep" and allowed and sem_num is not None and sem_num not in allowed:
                         print(f"      - Skip PDF: semester {sem_num} not in allowed {allowed}")
                         verdict = "skip"
+
+                    # 6. Branch verification from PDF text and verified code
+                    if verdict == "keep" and branches:
+                        allowed_branch, branch_reason = is_allowed_branch(code, text, branches)
+                        if not allowed_branch:
+                            print(f"      - Skip PDF: {branch_reason} (code: '{code}')")
+                            verdict = "skip"
 
                     if verdict == "skip":
                         manifest["hashes"][h] = "skipped"

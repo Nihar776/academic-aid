@@ -27,6 +27,19 @@ course: "B.Tech Question Paper"
 # Last years -> exam year must be >= this (e.g. 2022..2026)
 since_year: 2022
 
+# ---- branch / discipline filter ------------------------------------------
+# Narrow papers down to specific branches/disciplines.
+# Matches Knimbus SUBJECT filter and DBATU course codes.
+# Options:
+#   - "Computer Engineering"
+#   - "Computer Science and Engineering"
+#   - "Information Technology"
+# Leave [] or omit to accept all branches.
+branches:
+  - "Computer Engineering"
+  - "Computer Science and Engineering"
+  - "Information Technology"
+
 max_pages: 15          # safety cap on result pages per subject
 
 # ---- subjects ------------------------------------------------------------
