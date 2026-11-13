@@ -1,0 +1,44 @@
+# ---- where PDFs go -------------------------------------------------------
+# Point this at your local or cloud-synced folder
+# Windows example: "G:/My Drive/PYQs"      Mac example: "~/Google Drive/My Drive/PYQs"
+output_dir: "./PYPs/ML.PYPs/"
+
+# Question Papers section URL on Knimbus (used as the starting point)
+base_url: "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?sectionId=1ad6bd68-4cc6-4d8b-8550-2203b35075ef&sectionName=QUESTION+PAPERS"
+
+# ---- course / degree filter ----------------------------------------------
+# Target degree/course type. Papers downloaded will match this course.
+# Options matching Knimbus REPOSITORY filter:
+#   - "B.Tech Question Paper"  (or shorthand: "btech")   <-- DEFAULT (B.Tech only)
+#   - "Diploma Question Paper" (or shorthand: "diploma")
+#   - "M.Tech Question Paper"  (or shorthand: "mtech")
+#   - "B. Pharmacy Question Paper" (or shorthand: "pharmacy")
+#   - "B. Architecture Question Paper" (or shorthand: "architecture")
+#   - "all" (downloads across all courses without filtering)
+course: "B.Tech Question Paper"
+
+# Last years -> exam year must be >= this (e.g. 2022..2026)
+since_year: 2022
+
+max_pages: 15          # safety cap on result pages per subject
+
+# ---- subjects ------------------------------------------------------------
+# search   : query typed in Knimbus "search within results"
+# keywords : ALL must appear in the card title (and in text if available)
+# exclude  : if ANY appears, the paper is skipped (e.g. "advanced" to drop "Advanced Machine Learning")
+# sem      : semester taught in -> accepts sem-1, sem, sem+1 (or set to null / "any" to accept all semesters)
+# codes    : optional list of course codes (leave [] to accept all codes)
+subjects:
+  - name: Machine Learning
+    search: machine learning
+    keywords: ["machine learning"]
+    exclude: ["advanced", "introduction"]
+    sem: 5
+    codes: []
+
+  # - name: DBMS
+  #   search: database management
+  #   keywords: ["database"]
+  #   exclude: []
+  #   sem: 4
+  #   codes: []
