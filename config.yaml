@@ -1,7 +1,7 @@
 # ---- where PDFs go -------------------------------------------------------
 # Point this at your local or cloud-synced folder
 # Windows example: "G:/My Drive/PYQs"      Mac example: "~/Google Drive/My Drive/PYQs"
-output_dir: "./PYPs/ML.PYPs/"
+output_dir: "./PYPs/Semester-05/"
 
 # Question Papers section URL on Knimbus (used as the starting point)
 base_url: "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?sectionId=1ad6bd68-4cc6-4d8b-8550-2203b35075ef&sectionName=QUESTION+PAPERS"
@@ -53,12 +53,49 @@ subjects:
     search: machine learning
     keywords: ["machine learning"]
     exclude: ["advanced", "introduction"]
-    sem: 5
+    sem: null
     codes: []
 
-  # - name: DBMS
-  #   search: database management
-  #   keywords: ["database"]
-  #   exclude: []
-  #   sem: 4
-  #   codes: []
+  - name: Theory of Computations
+    search: theory of computation
+    keywords: ["theory of computation"]
+    exclude: []
+    sem: null
+    codes: []
+
+  - name: Operating Systems
+    search: operating systems
+    keywords: ["operating system"]
+    exclude: ["advanced"]
+    sem: null
+    codes: []
+
+  - name: Database Management Systems
+    search: database management
+    keywords: ["database"]
+    exclude: ["advanced"]
+    sem: null
+    codes: []
+
+  - name: Computer Graphics
+    search: computer graphics
+    keywords: ["computer graphics"]
+    exclude: []
+    sem: null
+    codes: []
+
+  - name: Foundations of Quantum Technologies
+    search: quantum
+    keywords: ["quantum"]
+    exclude: ["mtech", "advanced"]
+    sem: null
+    codes: []
+
+  - name: Entrepreneurship Skills and Digital Marketing Strategies
+    search: entrepreneurship
+    keywords: ["entrepreneurship"]
+    exclude: []
+    sem: null
+    codes: []
+
+
