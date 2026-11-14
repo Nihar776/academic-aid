@@ -244,14 +244,55 @@ def slug(s):
 def merge_configs(base: dict, secondary: dict) -> dict:
     """
     Deep-merges a secondary configuration onto a base configuration.
-    Any setting defined in secondary (output_dir, branches, subjects, since_year,
-    course, max_pages, filters, credentials) overrides the base configuration.
+    Any setting defined in secondary (output_dir, branches, since_year, course,
+    max_pages, filters, credentials) overrides the base configuration.
+
+    If both base and secondary define subjects:
+    - Subjects with the same name are merged (secondary properties override base properties).
+    - Base subjects not redefined in secondary are preserved.
+    - Secondary subjects not in base are added.
+    - All subjects are iterated.
     """
     merged = copy.deepcopy(base)
     for key, val in secondary.items():
         if val is None:
             continue
-        if isinstance(val, dict) and key in merged and isinstance(merged[key], dict):
+        if key == "subjects":
+            base_subs = copy.deepcopy(merged.get("subjects") or [])
+            sec_subs = copy.deepcopy(val or [])
+            if not base_subs:
+                merged["subjects"] = sec_subs
+            elif not sec_subs:
+                merged["subjects"] = base_subs
+            else:
+                merged_subs = []
+                sec_map = {s["name"].strip().lower(): s for s in sec_subs if isinstance(s, dict) and s.get("name")}
+                used_sec = set()
+
+                for b_sub in base_subs:
+                    if isinstance(b_sub, dict) and b_sub.get("name"):
+                        b_key = b_sub["name"].strip().lower()
+                        if b_key in sec_map:
+                            # Secondary overrides base subject attributes
+                            m_sub = copy.deepcopy(b_sub)
+                            m_sub.update(sec_map[b_key])
+                            merged_subs.append(m_sub)
+                            used_sec.add(b_key)
+                        else:
+                            merged_subs.append(b_sub)
+                    else:
+                        merged_subs.append(b_sub)
+
+                for s_sub in sec_subs:
+                    if isinstance(s_sub, dict) and s_sub.get("name"):
+                        s_key = s_sub["name"].strip().lower()
+                        if s_key not in used_sec:
+                            merged_subs.append(s_sub)
+                    else:
+                        merged_subs.append(s_sub)
+
+                merged["subjects"] = merged_subs
+        elif isinstance(val, dict) and key in merged and isinstance(merged[key], dict):
             sub_merged = copy.deepcopy(merged[key])
             sub_merged.update(val)
             merged[key] = sub_merged
@@ -995,13 +1036,41 @@ def main():
                 exc = [e.lower() for e in sub.get("exclude", [])]
                 codes = {c.upper() for c in sub.get("codes", [])}
 
-                # Dedicated address for subject, or fallback to general repo
+                # Atomic Inheritance resolution for subject:
+                # 1. Output folder: dedicated address in subject -> secondary -> base -> default
                 sub_addr = sub.get("output_dir") or sub.get("address") or sub.get("folder") or sub.get("path") or sub.get("repo")
                 if sub_addr:
                     folder = Path(sub_addr).expanduser()
                 else:
                     folder = out / slug(sub["name"])
                 folder.mkdir(parents=True, exist_ok=True)
+
+                # 2. Branches: subject -> secondary -> base
+                branches = sub.get("branches") or cfg.get("branches", [])
+
+                # 3. Exam since year: subject -> secondary -> base
+                sub_since = sub.get("since_year") if sub.get("since_year") is not None else cfg.get("since_year", date.today().year - 4)
+
+                # 4. Course / degree: subject -> secondary -> base (or CLI args.course)
+                sub_course_raw = sub.get("course") or (args.course if args.course is not None else (cfg.get("course") or cfg_filters.get("course") or cfg_filters.get("repository") or "B.Tech Question Paper"))
+                sub_repo_label, sub_prog_target = resolve_course(sub_course_raw)
+
+                # 5. Max pages: subject -> secondary -> base
+                sub_max_pages = sub.get("max_pages") or cfg.get("max_pages", 15)
+
+                # 6. Portal filters: subject -> secondary -> base
+                sub_filters_cfg = copy.deepcopy(filters_cfg)
+                if "filters" in sub and isinstance(sub["filters"], dict):
+                    sub_filters_cfg.update(sub["filters"])
+                for fk in ("author", "subject", "publication_year", "year", "dept"):
+                    if fk in sub:
+                        sub_filters_cfg[fk] = sub[fk]
+                if sub_repo_label:
+                    sub_filters_cfg["repository"] = sub_repo_label
+                    sub_filters_cfg["course"] = sub_repo_label
+
+                # 7. Portal URL: subject -> secondary -> base
+                sub_base_url = sub.get("base_url") or cfg.get("base_url", first_base_url)
 
                 sub_manifest_path = folder / "manifest.json"
                 if sub_manifest_path.exists():
@@ -1012,7 +1081,6 @@ def main():
                 else:
                     sub_manifest = {"hashes": {}, "keys": {}}
 
-                branches = sub.get("branches") or cfg.get("branches")
                 print(f"\n=== Subject: {sub['name']} ===")
                 if sub_addr:
                     print(f"    Dedicated Address: {folder}")
@@ -1022,9 +1090,13 @@ def main():
                     print(f"    Allowed Semesters: {sorted(allowed)}")
                 if branches:
                     print(f"    Target Branches  : {branches}")
+                if sub_prog_target != prog_target:
+                    print(f"    Course Override  : {sub_repo_label} ({sub_prog_target})")
+                if sub_since != since:
+                    print(f"    Since Year Over. : {sub_since}")
                 print(f"    Search Query     : '{sub['search']}'")
 
-                search_url = with_search(cfg.get("base_url", first_base_url), sub["search"], filters_cfg.get("subject"))
+                search_url = with_search(sub_base_url, sub["search"], sub_filters_cfg.get("subject"))
                 page.goto(search_url)
                 page.wait_for_load_state("networkidle")
                 if "login" in page.url:
@@ -1033,12 +1105,11 @@ def main():
                     page.wait_for_load_state("networkidle")
 
                 # Apply UI portal filters according to detailed config
-                apply_portal_filters(page, filters_cfg)
+                apply_portal_filters(page, sub_filters_cfg)
 
                 seen_cards, kept = set(), 0
-                max_pages = cfg.get("max_pages", 15)
 
-                for pg in range(1, max_pages + 1):
+                for pg in range(1, sub_max_pages + 1):
                     if pg > 1:
                         print(f"\n--- Navigating to page {pg} ---")
                         if not go_to_page(page, pg):
@@ -1085,14 +1156,14 @@ def main():
                             continue
 
                         # 3. Year check from card
-                        if c["year"] and c["year"] < since:
-                            print(f"      - Skip: year {c['year']} < {since}")
+                        if c["year"] and c["year"] < sub_since:
+                            print(f"      - Skip: year {c['year']} < {sub_since}")
                             continue
 
                         # 4. Course check from card (e.g. Reject Diploma [23DCE...], MCA [MCAC...] when B.Tech is required)
-                        if prog_target != "all":
-                            if c["prog"] != "unknown" and c["prog"] != prog_target:
-                                print(f"      - Skip: non-{prog_target} card (detected: {c['prog']})")
+                        if sub_prog_target != "all":
+                            if c["prog"] != "unknown" and c["prog"] != sub_prog_target:
+                                print(f"      - Skip: non-{sub_prog_target} card (detected: {c['prog']})")
                                 continue
 
                         # 5. Optional course code whitelist check from card
@@ -1150,21 +1221,21 @@ def main():
                         code = (info.get("code") or c.get("code") or "NOCODE").upper().strip()
                         code = re.sub(r'[\\/*?:"<>|]+', "_", code).strip("._- ") or "NOCODE"
 
-                        if prog_target != "all":
+                        if sub_prog_target != "all":
                             # If course code starts with BT, BTECH, or NEP patterns, it is guaranteed B.Tech
                             if re.search(r"^BT|BTECH|^\d{2}(UD|AF)|UD.*PEC|^PEC", code):
                                 pass
-                            elif info["programme"] not in (prog_target, "unknown"):
-                                print(f"      - Skip PDF: programme '{info['programme']}' does not match target '{prog_target}'")
+                            elif info["programme"] not in (sub_prog_target, "unknown"):
+                                print(f"      - Skip PDF: programme '{info['programme']}' does not match target '{sub_prog_target}'")
                                 verdict = "skip"
-                            elif c["prog"] not in (prog_target, "unknown"):
-                                print(f"      - Skip PDF: card prog '{c['prog']}' does not match target '{prog_target}'")
+                            elif c["prog"] not in (sub_prog_target, "unknown"):
+                                print(f"      - Skip PDF: card prog '{c['prog']}' does not match target '{sub_prog_target}'")
                                 verdict = "skip"
 
                         # 3. Year verification
                         paper_year = info.get("year") or c.get("year")
-                        if verdict == "keep" and paper_year and int(paper_year) < since:
-                            print(f"      - Skip PDF: year {paper_year} < {since}")
+                        if verdict == "keep" and paper_year and int(paper_year) < sub_since:
+                            print(f"      - Skip PDF: year {paper_year} < {sub_since}")
                             verdict = "skip"
 
                         # 4. Course code whitelist verification
