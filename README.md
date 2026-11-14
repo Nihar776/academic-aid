@@ -75,17 +75,32 @@ dbatu-pyp-fetcher/
 
 ---
 
-## Configuration Architecture
+## Configuration Architecture (OOP Inheritance Model)
 
-The project splits configuration into two modular, functional layers:
+The configuration engine follows an **Object-Oriented Programming (OOP) Inheritance Model**:
+
+```text
+Level 1: BASE config (Parent Defaults: config.yaml)
+   │
+   ▼
+Level 2: SECONDARY config (Subclass Overrides: configs/*.yaml)
+   │
+   ▼
+Level 3: SUBJECT level (Leaf Instance Overrides: subjects list in YAML)
+```
+
+**Priority Hierarchy**:
+$$\text{Subject Level (Highest)} > \text{Secondary Config} > \text{Base Config (Lowest)}$$
+
+---
 
 ### 1. Base Configuration (`config.yaml`)
-Contains global defaults for the scraper:
-- Central default `output_dir`
+Acts as the **parent class** providing global defaults:
+- Default `output_dir: "./PYPs/"`
 - Knimbus `base_url` and `credentials`
-- Unified `course` degree filter (matches Knimbus `REPOSITORY` facet)
-- `since_year`, `filters`, `branches`, and `max_pages`
-- Optional default `subjects: []` (if empty, the program will prompt you to select a secondary config)
+- Default `course: "B.Tech Question Paper"`
+- `since_year: 2022`, sidebar `filters`, default `branches`, and `max_pages: 15`
+- Optional `subjects: []` (common subjects across all branches, or left empty)
 
 ```yaml
 output_dir: "./PYPs/"
@@ -118,8 +133,11 @@ max_pages: 15
 subjects: []
 ```
 
+---
+
 ### 2. Secondary Subject Configurations (`configs/*.yaml`)
-Contains branch- or semester-specific subjects. **Any setting specified in a secondary config automatically overrides the base config** (for example, overriding `branches` or `output_dir`):
+Acts as a **subclass** specializing configuration for a particular branch, course, or semester.
+Any setting specified here automatically overrides the base defaults for this run.
 
 Example (`configs/aiml_sem5.yaml`):
 ```yaml
@@ -133,7 +151,6 @@ branches:
 subjects:
   - name: Machine Learning
     search: machine learning
-    # output_dir: "D:/Dedicated_ML_Drive" # Optional dedicated address per subject
     keywords: ["machine learning"]
     exclude: ["advanced", "introduction"]
     sem: 5
@@ -146,6 +163,47 @@ subjects:
     sem: 5
     codes: []
 ```
+
+---
+
+### 3. Subject-Level Configuration (Atomic Leaf Overrides)
+Every subject entry is treated as an individual object that can **atomically override any configuration parameter** for itself without affecting any other subject:
+
+```yaml
+subjects:
+  - name: Specialized Distributed AI
+    search: distributed ai
+    keywords: ["distributed"]
+    sem: 5
+    # --- Atomic Subject Overrides ---
+    output_dir: "D:/Dedicated_AI_Drive/"       # Dedicated storage folder for this subject
+    branches: ["Artificial Intelligence and Machine Learning"] # Overrides branch whitelist
+    course: "M.Tech Question Paper"            # Overrides degree target (e.g. elective)
+    since_year: 2020                           # Overrides minimum exam year
+    max_pages: 5                               # Overrides crawl depth
+    filters:                                   # Overrides portal facets
+      author: ["winter"]
+```
+
+#### Atomic Override Reference Table
+
+| Parameter | Inherited From | Subject Override Syntax | Effect on That Subject |
+|---|---|---|---|
+| **`output_dir`** | Base or Secondary | `output_dir: "path"` or `address:` | Saves papers to a dedicated custom path instead of the parent folder. |
+| **`branches`** | Base or Secondary | `branches: ["IT", "CSE"]` | Checks course code & PDF text against these specific branches only. |
+| **`since_year`** | Base or Secondary | `since_year: 2020` | Accepts older or newer exams specifically for this subject. |
+| **`course`** | Base or Secondary | `course: "M.Tech Question Paper"` | Scrapes M.Tech or Diploma papers even if parent run is B.Tech. |
+| **`filters`** | Base or Secondary | `filters: { author: ["winter"] }` | Overrides portal sidebar filters (e.g. winter/summer/supplementary). |
+| **`max_pages`** | Base or Secondary | `max_pages: 5` | Custom crawl pagination depth. |
+| **`base_url`** | Base or Secondary | `base_url: "https://..."` | Custom Knimbus section URL. |
+
+---
+
+### 4. Subject Merging & Iteration Rules
+When both the **Base** configuration (`config.yaml`) and a **Secondary** configuration (`configs/*.yaml`) define subjects:
+1. **All subjects are iterated**: The scraper runs every subject from both files.
+2. **Override & Inheritance**: If a subject with the same name exists in both files, the Secondary subject definition overrides and extends the Base subject (inheriting any unmentioned fields).
+3. **Preservation**: Unique subjects from Base are preserved; unique subjects from Secondary are appended.
 
 ---
 
