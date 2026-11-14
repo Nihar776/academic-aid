@@ -1,0 +1,66 @@
+# ==============================================================================
+# DBATU PYP Fetcher - BASE Configuration (config.yaml)
+# ==============================================================================
+# Central defaults for scraper execution, portal URL, credentials, and filters.
+# Branch- or semester-specific subjects are kept in secondary config files
+# (e.g. `configs/aiml_sem5.yaml`, `configs/cse_sem5.yaml`) and invoked with `-s`.
+# Any setting in a secondary config will override the defaults set here.
+
+# ---- Default Output Directory ------------------------------------------------
+# Central default folder where question papers are organized and saved.
+output_dir: "./PYPs/"
+
+# ---- Knimbus Digital Library Portal URL --------------------------------------
+# Starting URL for the DBATU digital library question papers section.
+base_url: "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?sectionId=1ad6bd68-4cc6-4d8b-8550-2203b35075ef&sectionName=QUESTION+PAPERS"
+
+# ---- Optional credentials for auto-login -------------------------------------
+# If set, the script can log in automatically even in headless mode.
+# If left empty, run in headful mode to log in interactively via browser window.
+credentials:
+  email: "createlearningforall@gmail.com"
+  password: "Abc@123"
+
+# ---- Degree / Course Filter --------------------------------------------------
+# Target degree/course. (Unified with portal filters; matches Knimbus REPOSITORY facet)
+# Options:
+#   - "B.Tech Question Paper"  (or shorthand: "btech")   <-- DEFAULT
+#   - "Diploma Question Paper" (or shorthand: "diploma")
+#   - "M.Tech Question Paper"  (or shorthand: "mtech")
+#   - "B. Pharmacy Question Paper" (or shorthand: "pharmacy")
+#   - "B. Architecture Question Paper" (or shorthand: "architecture")
+#   - "all" (downloads across all courses without filtering)
+course: "B.Tech Question Paper"
+
+# ---- Exam Year Range ---------------------------------------------------------
+# Exam year must be >= this (e.g. 2022..2026)
+since_year: 2022
+
+# ---- Portal Sidebar Filters --------------------------------------------------
+# Facets applied directly on Knimbus sidebar:
+filters:
+  subject: null                         # None (avoids restrictive portal locks; code-level filter handles branches)
+  publication_year: null                # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
+  year: null                            # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
+  dept: null                            # from config.yaml (e.g. null or ["Computer Engineering"])
+  author:                               # supplementary, summer, winter
+    - "supplementary"
+    - "summer"
+    - "winter"
+
+# ---- Default Branch / Discipline Filter --------------------------------------
+# Default branches accepted by DBATU course code and PDF text heuristics.
+# Secondary configs can override this (e.g. CSE, IT, AIML).
+branches:
+  - "Computer Engineering"
+  - "Computer Science and Engineering"
+  - "Information Technology"
+  - "Artificial Intelligence and Machine Learning"
+
+# Safety cap on result pages crawled per subject
+max_pages: 15
+
+# ---- Base Subjects List (Optional) -------------------------------------------
+# Leave empty `[]` when using secondary configs (e.g. `python pyq_fetch.py -s configs/aiml_sem5.yaml`).
+# If no secondary config is passed and this list is empty, the program will prompt you to pick a config.
+subjects: []
