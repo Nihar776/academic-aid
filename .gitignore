@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+TOC_PPTs/
+PYPs/
+downloads/
+.browser-profile/
+debug/
+_test_run/
