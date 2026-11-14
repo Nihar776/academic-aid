@@ -1,0 +1,51 @@
+# ==============================================================================
+# Secondary Config: Computer Science & Engineering (CSE) - Sem 5
+# ==============================================================================
+output_dir: "./PYPs/CSE/Semester-05/"
+
+branches:
+  - "Computer Engineering"
+  - "Computer Science and Engineering"
+
+subjects:
+  - name: Machine Learning
+    search: machine learning
+    keywords: ["machine learning"]
+    exclude: ["advanced", "introduction"]
+    sem: 5
+    codes: []
+
+  - name: Theory of Computations
+    search: theory of computation
+    keywords: ["theory of computation"]
+    exclude: []
+    sem: 5
+    codes: []
+
+  - name: Operating Systems
+    search: operating systems
+    keywords: ["operating system"]
+    exclude: ["advanced"]
+    sem: 5
+    codes: []
+
+  - name: Database Management Systems
+    search: database management
+    keywords: ["database"]
+    exclude: ["advanced"]
+    sem: 5
+    codes: []
+
+  - name: Computer Graphics
+    search: computer graphics
+    keywords: ["computer graphics"]
+    exclude: []
+    sem: 5
+    codes: []
+
+  - name: Entrepreneurship Skills and Digital Marketing Strategies
+    search: entrepreneurship
+    keywords: ["entrepreneurship"]
+    exclude: []
+    sem: 5
+    codes: []

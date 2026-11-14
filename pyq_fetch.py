@@ -25,7 +25,7 @@ Usage:
     python pyq_fetch.py --headless              # run in headless mode
     python pyq_fetch.py --debug                 # saves screenshot + HTML when something looks off
 """
-import argparse, hashlib, io, json, os, re, sys, time
+import argparse, copy, hashlib, io, json, os, re, sys, time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -239,6 +239,25 @@ def parse_card(text: str) -> dict[str, Any]:
 # ------------------------------------------------------------------ helpers & formatting
 def slug(s):
     return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
+
+
+def merge_configs(base: dict, secondary: dict) -> dict:
+    """
+    Deep-merges a secondary configuration onto a base configuration.
+    Any setting defined in secondary (output_dir, branches, subjects, since_year,
+    course, max_pages, filters, credentials) overrides the base configuration.
+    """
+    merged = copy.deepcopy(base)
+    for key, val in secondary.items():
+        if val is None:
+            continue
+        if isinstance(val, dict) and key in merged and isinstance(merged[key], dict):
+            sub_merged = copy.deepcopy(merged[key])
+            sub_merged.update(val)
+            merged[key] = sub_merged
+        else:
+            merged[key] = copy.deepcopy(val)
+    return merged
 
 
 def match_subject(sub: dict, query: str) -> bool:
@@ -781,82 +800,94 @@ def fetch_pdf(ctx, page, btn) -> tuple[bytes | None, str, str]:
 # ------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser(description="Bulk-download DBATU previous year question papers from Knimbus.")
-    ap.add_argument("--config", default="config.yaml", help="Path to config.yaml")
-    ap.add_argument("--only", nargs="+", action="extend", help="Run only for specific subject(s). Can pass multiple names, acronyms, or comma-separated (e.g. --only ML DBMS or --only ML,DBMS)")
-    ap.add_argument("--course", help="Target course/degree type (e.g. 'B.Tech', 'Diploma', 'M.Tech', 'Pharmacy', 'all')")
+    ap.add_argument("-c", "--config", default="config.yaml", help="Path to base configuration YAML file (default: config.yaml)")
+    ap.add_argument("-s", "--secondary", "--subjects-config", "--branch-config", nargs="+", action="extend",
+                    help="Path(s) to secondary branch/subject configuration YAML file(s) (e.g. -s configs/aiml_sem5.yaml configs/cse_sem5.yaml)")
+    ap.add_argument("--only", nargs="+", action="extend",
+                    help="Run only for specific subject(s). Can pass multiple names, acronyms, or comma-separated (e.g. --only ML DBMS or --only ML,DBMS)")
+    ap.add_argument("--course", help="Target course/degree type override (e.g. 'B.Tech', 'Diploma', 'M.Tech', 'Pharmacy', 'all')")
     ap.add_argument("--email", help="Knimbus login email (for automated headless login)")
     ap.add_argument("--password", help="Knimbus login password")
     ap.add_argument("--headless", action="store_true", help="Run browser in headless mode")
     ap.add_argument("--debug", action="store_true", help="Save debug screenshots and HTML dumps")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(open(args.config, encoding="utf-8"))
-    out = Path(cfg["output_dir"]).expanduser()
-    out.mkdir(parents=True, exist_ok=True)
-    since = cfg.get("since_year", date.today().year - 4)
-    manifest_path = out / "manifest.json"
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"hashes": {}, "keys": {}}
+    base_path = Path(args.config)
+    if not base_path.exists():
+        print(f"Error: Base configuration file '{base_path}' not found.")
+        sys.exit(1)
 
-    # Detailed portal filter configuration from config.yaml
-    cfg_filters = cfg.get("filters", {}) or {}
-    raw_course = args.course if args.course is not None else (cfg_filters.get("repository") or cfg.get("course", "B.Tech Question Paper"))
-    repo_label, prog_target = resolve_course(raw_course)
+    base_cfg = yaml.safe_load(open(base_path, encoding="utf-8")) or {}
 
-    filters_cfg = {
-        "repository": repo_label or "B.Tech Question Paper",
-        "subject": cfg_filters.get("subject", None),
-        "publication_year": cfg_filters.get("publication_year", None),
-        "year": cfg_filters.get("year", None),
-        "dept": cfg_filters.get("dept", None),
-        "course": cfg_filters.get("course", None),
-        "author": cfg_filters.get("author", ["supplementary", "summer", "winter"]),
-    }
-
-    # Resolve target subjects before launching the browser (supports multiple subjects in --only)
-    target_subjects = []
-    if args.only:
-        raw_queries = []
-        for item in args.only:
+    # Collect secondary config files from -s / --secondary
+    secondary_files = []
+    if args.secondary:
+        for item in args.secondary:
             for part in item.split(","):
                 p = part.strip()
                 if p:
-                    raw_queries.append(p)
+                    secondary_files.append(p)
 
-        seen_sub_names = set()
-        for q in raw_queries:
-            matched = [s for s in cfg.get("subjects", []) if match_subject(s, q) and s["name"] not in seen_sub_names]
-            if matched:
-                for m in matched:
-                    target_subjects.append(m)
-                    seen_sub_names.add(m["name"])
+    # Check if secondary config is provided; if not, check base config subjects
+    if not secondary_files:
+        base_subjects = base_cfg.get("subjects") or []
+        if not base_subjects:
+            print(f"\n[!] Notice: Base configuration '{base_path}' contains no subjects.")
+
+            # Look for available configs in ./configs/ and ./
+            discovered = []
+            for d in (Path("configs"), Path(".")):
+                if d.exists() and d.is_dir():
+                    for f in sorted(d.glob("*.yaml")) + sorted(d.glob("*.yml")):
+                        if f.resolve() != base_path.resolve():
+                            discovered.append(f)
+
+            if discovered:
+                print("    Available subject configuration files:")
+                for idx, cf in enumerate(discovered, 1):
+                    print(f"      {idx}. {cf.as_posix()}")
+                print()
+                prompt_msg = "    Enter config file path, selection number, or press Enter to exit: "
             else:
-                print(f"\n[!] Notice: No exact subject matching '--only \"{q}\"' found in {args.config}.")
-                print(f"    [+] Creating an ad-hoc subject search for: '{q}'")
-                clean_words = [w.lower() for w in q.split() if len(w) > 2 and w.lower() not in ("with", "from", "and", "the", "for", "in")]
-                target_subjects.append({
-                    "name": q.title(),
-                    "search": q.lower(),
-                    "keywords": clean_words or [q.lower()],
-                    "exclude": [],
-                    "sem": 5,
-                    "codes": []
-                })
-                seen_sub_names.add(q.title())
-    else:
-        target_subjects = cfg.get("subjects", [])
+                prompt_msg = "    Enter path to a subject configuration file (or press Enter to exit): "
 
-    print(f"==================================================")
-    print(f" DBATU PYQ Fetcher")
-    print(f" Target Course : '{repo_label or 'ALL'}' (key: {prog_target})")
-    print(f" Min Year      : {since}")
-    print(f" Output Folder : {out}")
-    print(f" Naming Format : sem-year-sum/win-R/S-Code[-n].pdf")
-    if args.only:
-        matched_names = [s['name'] for s in target_subjects]
-        print(f" Filter (--only): {args.only} -> Matched {len(target_subjects)}: {matched_names}")
+            try:
+                choice = input(prompt_msg).strip()
+            except (EOFError, KeyboardInterrupt):
+                choice = ""
+
+            if not choice:
+                print("No subject configuration provided. Exiting.")
+                sys.exit(0)
+
+            if choice.isdigit() and discovered:
+                idx = int(choice) - 1
+                if 0 <= idx < len(discovered):
+                    secondary_files = [str(discovered[idx])]
+                else:
+                    print(f"Invalid selection number '{choice}'. Exiting.")
+                    sys.exit(1)
+            else:
+                secondary_files = [choice]
+
+    # Build list of execution runs: [(run_label, effective_cfg, cfg_source), ...]
+    runs = []
+    if secondary_files:
+        for sec_str in secondary_files:
+            sec_path = Path(sec_str)
+            if not sec_path.exists():
+                print(f"[!] Warning: Secondary config file '{sec_str}' not found.")
+                continue
+            sec_cfg = yaml.safe_load(open(sec_path, encoding="utf-8")) or {}
+            merged = merge_configs(base_cfg, sec_cfg)
+            runs.append((sec_path.stem, merged, sec_str))
     else:
-        print(f" Subjects Total: {len(target_subjects)}")
-    print(f"==================================================")
+        # Running directly from base config (Case 1 or Case 2)
+        runs.append(("base", base_cfg, str(base_path)))
+
+    if not runs:
+        print("No valid configurations found to execute. Exiting.")
+        sys.exit(1)
 
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
@@ -866,249 +897,329 @@ def main():
             viewport={"width": 1366, "height": 800}
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(cfg["base_url"])
+
+        first_base_url = runs[0][1].get("base_url") or "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?sectionId=1ad6bd68-4cc6-4d8b-8550-2203b35075ef&sectionName=QUESTION+PAPERS"
+        page.goto(first_base_url)
         page.wait_for_load_state("networkidle")
-        handle_login(page, cfg, args)
+        handle_login(page, runs[0][1], args)
 
-        for sub in target_subjects:
+        total_runs = len(runs)
+        for run_idx, (run_label, cfg, cfg_source) in enumerate(runs, 1):
+            if total_runs > 1:
+                print(f"\n{'='*65}\n RUN {run_idx}/{total_runs}: [{run_label}] (Config: {cfg_source})\n{'='*65}")
 
-            sem = sub.get("sem")
-            if sem is None or str(sem).lower() in ("any", "all", "none"):
-                allowed = None
-            elif isinstance(sem, list):
-                allowed = set(sem)
-            elif isinstance(sem, int):
-                allowed = {sem - 1, sem, sem + 1}
+            out = Path(cfg.get("output_dir", "./PYPs/")).expanduser()
+            out.mkdir(parents=True, exist_ok=True)
+            since = cfg.get("since_year", date.today().year - 4)
+            manifest_path = out / "manifest.json"
+            manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"hashes": {}, "keys": {}}
+
+            # Merged course & repository resolution
+            cfg_filters = cfg.get("filters", {}) or {}
+            raw_course = args.course if args.course is not None else (cfg.get("course") or cfg_filters.get("course") or cfg_filters.get("repository") or "B.Tech Question Paper")
+            repo_label, prog_target = resolve_course(raw_course)
+
+            filters_cfg = {
+                "repository": repo_label or "B.Tech Question Paper",
+                "subject": cfg_filters.get("subject", None),
+                "publication_year": cfg_filters.get("publication_year", None),
+                "year": cfg_filters.get("year", None),
+                "dept": cfg_filters.get("dept", None),
+                "course": repo_label or "B.Tech Question Paper",
+                "author": cfg_filters.get("author", ["supplementary", "summer", "winter"]),
+            }
+
+            # Resolve target subjects (applying --only if passed)
+            target_subjects = []
+            if args.only:
+                raw_queries = []
+                for item in args.only:
+                    for part in item.split(","):
+                        p = part.strip()
+                        if p:
+                            raw_queries.append(p)
+
+                seen_sub_names = set()
+                for q in raw_queries:
+                    matched = [s for s in cfg.get("subjects", []) if match_subject(s, q) and s["name"] not in seen_sub_names]
+                    if matched:
+                        for m in matched:
+                            target_subjects.append(m)
+                            seen_sub_names.add(m["name"])
+                    elif total_runs == 1:
+                        print(f"\n[!] Notice: No exact subject matching '--only \"{q}\"' found in {cfg_source}.")
+                        print(f"    [+] Creating an ad-hoc subject search for: '{q}'")
+                        clean_words = [w.lower() for w in q.split() if len(w) > 2 and w.lower() not in ("with", "from", "and", "the", "for", "in")]
+                        target_subjects.append({
+                            "name": q.title(),
+                            "search": q.lower(),
+                            "keywords": clean_words or [q.lower()],
+                            "exclude": [],
+                            "sem": 5,
+                            "codes": []
+                        })
+                        seen_sub_names.add(q.title())
             else:
-                allowed = None
-            kws = [k.lower() for k in sub.get("keywords", [])]
-            exc = [e.lower() for e in sub.get("exclude", [])]
-            codes = {c.upper() for c in sub.get("codes", [])}
+                target_subjects = cfg.get("subjects", [])
 
-            # Dedicated address for subject, or fallback to general repo
-            sub_addr = sub.get("output_dir") or sub.get("address") or sub.get("folder") or sub.get("path") or sub.get("repo")
-            if sub_addr:
-                folder = Path(sub_addr).expanduser()
+            print(f"==================================================")
+            print(f" DBATU PYQ Fetcher - [{run_label}]")
+            print(f" Target Course : '{repo_label or 'ALL'}' (key: {prog_target})")
+            print(f" Min Year      : {since}")
+            print(f" Output Folder : {out}")
+            print(f" Branches      : {cfg.get('branches', [])}")
+            print(f" Naming Format : sem-year-sum/win-R/S-Code[-n].pdf")
+            if args.only:
+                matched_names = [s['name'] for s in target_subjects]
+                print(f" Filter (--only): {args.only} -> Matched {len(target_subjects)}: {matched_names}")
             else:
-                folder = out / slug(sub["name"])
-            folder.mkdir(parents=True, exist_ok=True)
+                print(f" Subjects Total: {len(target_subjects)}")
+            print(f"==================================================")
 
-            sub_manifest_path = folder / "manifest.json"
-            if sub_manifest_path.exists():
-                try:
-                    sub_manifest = json.loads(sub_manifest_path.read_text())
-                except Exception:
+            if not target_subjects:
+                print(f"  [i] No matching subjects to fetch for [{run_label}].")
+                continue
+
+            for sub in target_subjects:
+
+                sem = sub.get("sem")
+                if sem is None or str(sem).lower() in ("any", "all", "none"):
+                    allowed = None
+                elif isinstance(sem, list):
+                    allowed = set(sem)
+                elif isinstance(sem, int):
+                    allowed = {sem - 1, sem, sem + 1}
+                else:
+                    allowed = None
+                kws = [k.lower() for k in sub.get("keywords", [])]
+                exc = [e.lower() for e in sub.get("exclude", [])]
+                codes = {c.upper() for c in sub.get("codes", [])}
+
+                # Dedicated address for subject, or fallback to general repo
+                sub_addr = sub.get("output_dir") or sub.get("address") or sub.get("folder") or sub.get("path") or sub.get("repo")
+                if sub_addr:
+                    folder = Path(sub_addr).expanduser()
+                else:
+                    folder = out / slug(sub["name"])
+                folder.mkdir(parents=True, exist_ok=True)
+
+                sub_manifest_path = folder / "manifest.json"
+                if sub_manifest_path.exists():
+                    try:
+                        sub_manifest = json.loads(sub_manifest_path.read_text())
+                    except Exception:
+                        sub_manifest = {"hashes": {}, "keys": {}}
+                else:
                     sub_manifest = {"hashes": {}, "keys": {}}
-            else:
-                sub_manifest = {"hashes": {}, "keys": {}}
 
-            branches = sub.get("branches") or cfg.get("branches")
-            print(f"\n=== Subject: {sub['name']} ===")
-            if sub_addr:
-                print(f"    Dedicated Address: {folder}")
-            else:
-                print(f"    Target Folder    : {folder}")
-            if allowed:
-                print(f"    Allowed Semesters: {sorted(allowed)}")
-            if branches:
-                print(f"    Target Branches  : {branches}")
-            print(f"    Search Query     : '{sub['search']}'")
+                branches = sub.get("branches") or cfg.get("branches")
+                print(f"\n=== Subject: {sub['name']} ===")
+                if sub_addr:
+                    print(f"    Dedicated Address: {folder}")
+                else:
+                    print(f"    Target Folder    : {folder}")
+                if allowed:
+                    print(f"    Allowed Semesters: {sorted(allowed)}")
+                if branches:
+                    print(f"    Target Branches  : {branches}")
+                print(f"    Search Query     : '{sub['search']}'")
 
-            search_url = with_search(cfg["base_url"], sub["search"], filters_cfg.get("subject"))
-            page.goto(search_url)
-            page.wait_for_load_state("networkidle")
-            if "login" in page.url:
-                handle_login(page, cfg, args)
+                search_url = with_search(cfg.get("base_url", first_base_url), sub["search"], filters_cfg.get("subject"))
                 page.goto(search_url)
                 page.wait_for_load_state("networkidle")
+                if "login" in page.url:
+                    handle_login(page, cfg, args)
+                    page.goto(search_url)
+                    page.wait_for_load_state("networkidle")
 
-            # Apply UI portal filters according to detailed config
-            apply_portal_filters(page, filters_cfg)
+                # Apply UI portal filters according to detailed config
+                apply_portal_filters(page, filters_cfg)
 
-            seen_cards, kept = set(), 0
-            max_pages = cfg.get("max_pages", 15)
+                seen_cards, kept = set(), 0
+                max_pages = cfg.get("max_pages", 15)
 
-            for pg in range(1, max_pages + 1):
-                if pg > 1:
-                    print(f"\n--- Navigating to page {pg} ---")
-                    if not go_to_page(page, pg):
-                        print(f"  Reached last page at page {pg - 1}.")
+                for pg in range(1, max_pages + 1):
+                    if pg > 1:
+                        print(f"\n--- Navigating to page {pg} ---")
+                        if not go_to_page(page, pg):
+                            print(f"  Reached last page at page {pg - 1}.")
+                            break
+
+                    try:
+                        page.wait_for_selector("button:has-text('Read')", timeout=12000)
+                    except Exception:
+                        if args.debug:
+                            dump(page, f"{slug(sub['name'])}_p{pg}")
+                        print(f"  page {pg}: no results found, stopping.")
                         break
 
-                try:
-                    page.wait_for_selector("button:has-text('Read')", timeout=12000)
-                except Exception:
-                    if args.debug:
-                        dump(page, f"{slug(sub['name'])}_p{pg}")
-                    print(f"  page {pg}: no results found, stopping.")
-                    break
+                    read_buttons = page.locator("button:has-text('Read')")
+                    n = read_buttons.count()
+                    print(f"  page {pg}: found {n} paper cards")
 
-                read_buttons = page.locator("button:has-text('Read')")
-                n = read_buttons.count()
-                print(f"  page {pg}: found {n} paper cards")
+                    for i in range(n):
+                        btn = page.locator("button:has-text('Read')").nth(i)
+                        card = btn.locator("xpath=ancestor::div[count(.//button[normalize-space()='Read'])=1][last()]")
+                        ctext = card.inner_text() if card.count() > 0 else btn.inner_text()
 
-                for i in range(n):
-                    btn = page.locator("button:has-text('Read')").nth(i)
-                    card = btn.locator("xpath=ancestor::div[count(.//button[normalize-space()='Read'])=1][last()]")
-                    ctext = card.inner_text() if card.count() > 0 else btn.inner_text()
+                        c = parse_card(ctext)
+                        card_fingerprint = f"{c['title']}|{c['code']}|{c['year']}|{c['season']}"
+                        if card_fingerprint in seen_cards:
+                            continue
+                        seen_cards.add(card_fingerprint)
 
-                    c = parse_card(ctext)
-                    card_fingerprint = f"{c['title']}|{c['code']}|{c['year']}|{c['season']}"
-                    if card_fingerprint in seen_cards:
-                        continue
-                    seen_cards.add(card_fingerprint)
+                        print(f"    [{i+1}/{n}] '{c['full_title']}' {c['season'] or ''} {c['year'] or ''} (prog: {c['prog']})")
 
-                    print(f"    [{i+1}/{n}] '{c['full_title']}' {c['season'] or ''} {c['year'] or ''} (prog: {c['prog']})")
-
-                    # 1. Skip Mid-Semester / Class Test papers
-                    if c["is_mid_sem"]:
-                        print(f"      - Skip: Mid-Semester / Class Test paper")
-                        continue
-
-                    # 2. Subject keyword and exclusion check on card title
-                    tl = c["title"].lower()
-                    if not all(k in tl for k in kws):
-                        print(f"      - Skip: title does not match keywords {kws}")
-                        continue
-                    if any(e in tl for e in exc):
-                        print(f"      - Skip: title contains excluded keyword")
-                        continue
-
-                    # 3. Year check from card
-                    if c["year"] and c["year"] < since:
-                        print(f"      - Skip: year {c['year']} < {since}")
-                        continue
-
-                    # 4. Course check from card (e.g. Reject Diploma [23DCE...], MCA [MCAC...] when B.Tech is required)
-                    if prog_target != "all":
-                        if c["prog"] != "unknown" and c["prog"] != prog_target:
-                            print(f"      - Skip: non-{prog_target} card (detected: {c['prog']})")
+                        # 1. Skip Mid-Semester / Class Test papers
+                        if c["is_mid_sem"]:
+                            print(f"      - Skip: Mid-Semester / Class Test paper")
                             continue
 
-                    # 5. Optional course code whitelist check from card
-                    if codes and c["code"] and c["code"] not in codes:
-                        print(f"      - Skip: code {c['code']} not in whitelist")
-                        continue
+                        # 2. Subject keyword and exclusion check on card title
+                        tl = c["title"].lower()
+                        if not all(k in tl for k in kws):
+                            print(f"      - Skip: title does not match keywords {kws}")
+                            continue
+                        if any(e in tl for e in exc):
+                            print(f"      - Skip: title contains excluded keyword")
+                            continue
 
-                    # 6. Pre-download semester check from course code (saves downloading out-of-range papers)
-                    if allowed and c["code"]:
-                        code_sem_digits = re.findall(r"[A-Za-z]{2,}([1-8])\d{2}", c["code"])
-                        if code_sem_digits:
-                            card_sem = int(code_sem_digits[-1])
-                            if card_sem not in allowed:
-                                print(f"      - Skip: code '{c['code']}' indicates sem {card_sem}, wanted {sorted(allowed)}")
+                        # 3. Year check from card
+                        if c["year"] and c["year"] < since:
+                            print(f"      - Skip: year {c['year']} < {since}")
+                            continue
+
+                        # 4. Course check from card (e.g. Reject Diploma [23DCE...], MCA [MCAC...] when B.Tech is required)
+                        if prog_target != "all":
+                            if c["prog"] != "unknown" and c["prog"] != prog_target:
+                                print(f"      - Skip: non-{prog_target} card (detected: {c['prog']})")
                                 continue
 
-                    # 7. Pre-download branch check from course code and card text
-                    if branches:
-                        allowed_branch, branch_reason = is_allowed_branch(c["code"], ctext, branches)
-                        if not allowed_branch:
-                            print(f"      - Skip: {branch_reason} (code: '{c['code']}')")
+                        # 5. Optional course code whitelist check from card
+                        if codes and c["code"] and c["code"] not in codes:
+                            print(f"      - Skip: code {c['code']} not in whitelist")
                             continue
 
-                    # Fetch PDF using multi-vector delivery engine
-                    data, url, note = fetch_pdf(ctx, page, btn)
-                    if not data:
-                        print(f"    ! Could not fetch PDF for '{c['title']}': {note} ({url[:70]})")
-                        continue
+                        # 6. Pre-download semester check from course code (saves downloading out-of-range papers)
+                        if allowed and c["code"]:
+                            code_sem_digits = re.findall(r"[A-Za-z]{2,}([1-8])\d{2}", c["code"])
+                            if code_sem_digits:
+                                card_sem = int(code_sem_digits[-1])
+                                if card_sem not in allowed:
+                                    print(f"      - Skip: code '{c['code']}' indicates sem {card_sem}, wanted {sorted(allowed)}")
+                                    continue
 
-                    h = hashlib.sha256(data).hexdigest()
-                    if h in sub_manifest.get("hashes", {}) and sub_manifest["hashes"][h] != "skipped":
-                        saved_path = Path(sub_manifest["hashes"][h])
-                        if saved_path.exists():
-                            print(f"      = Already downloaded: {saved_path.name}")
+                        # 7. Pre-download branch check from course code and card text
+                        if branches:
+                            allowed_branch, branch_reason = is_allowed_branch(c["code"], ctext, branches)
+                            if not allowed_branch:
+                                print(f"      - Skip: {branch_reason} (code: '{c['code']}')")
+                                continue
+
+                        # Fetch PDF using multi-vector delivery engine
+                        data, url, note = fetch_pdf(ctx, page, btn)
+                        if not data:
+                            print(f"    ! Could not fetch PDF for '{c['title']}': {note} ({url[:70]})")
                             continue
-                    if h in manifest.get("hashes", {}) and manifest["hashes"][h] != "skipped":
-                        saved_path = Path(manifest["hashes"][h])
-                        if saved_path.exists():
-                            print(f"      = Already downloaded: {saved_path.name}")
+
+                        h = hashlib.sha256(data).hexdigest()
+                        if h in sub_manifest.get("hashes", {}) and sub_manifest["hashes"][h] != "skipped":
+                            saved_path = Path(sub_manifest["hashes"][h])
+                            if saved_path.exists():
+                                print(f"      = Already downloaded: {saved_path.name}")
+                                continue
+                        if h in manifest.get("hashes", {}) and manifest["hashes"][h] != "skipped":
+                            saved_path = Path(manifest["hashes"][h])
+                            if saved_path.exists():
+                                print(f"      = Already downloaded: {saved_path.name}")
+                                continue
+
+                        # Inspect PDF body
+                        text = pdf_first_pages_text(data)
+                        info = parse_paper(text)
+
+                        # 1. Mid-Semester verification from PDF
+                        if info["is_mid_sem"]:
+                            print(f"      - Skip PDF: Mid-Semester examination detected")
+                            sub_manifest["hashes"][h] = "skipped"
+                            manifest["hashes"][h] = "skipped"
                             continue
 
-                    # Inspect PDF body
-                    text = pdf_first_pages_text(data)
-                    info = parse_paper(text)
+                        # 2. Course verification
+                        verdict = "keep"
+                        code = (info.get("code") or c.get("code") or "NOCODE").upper().strip()
+                        code = re.sub(r'[\\/*?:"<>|]+', "_", code).strip("._- ") or "NOCODE"
 
-                    # 1. Mid-Semester verification from PDF
-                    if info["is_mid_sem"]:
-                        print(f"      - Skip PDF: Mid-Semester examination detected")
-                        sub_manifest["hashes"][h] = "skipped"
-                        manifest["hashes"][h] = "skipped"
-                        continue
+                        if prog_target != "all":
+                            # If course code starts with BT, BTECH, or NEP patterns, it is guaranteed B.Tech
+                            if re.search(r"^BT|BTECH|^\d{2}(UD|AF)|UD.*PEC|^PEC", code):
+                                pass
+                            elif info["programme"] not in (prog_target, "unknown"):
+                                print(f"      - Skip PDF: programme '{info['programme']}' does not match target '{prog_target}'")
+                                verdict = "skip"
+                            elif c["prog"] not in (prog_target, "unknown"):
+                                print(f"      - Skip PDF: card prog '{c['prog']}' does not match target '{prog_target}'")
+                                verdict = "skip"
 
-                    # 2. Course verification
-                    verdict = "keep"
-                    code = (info.get("code") or c.get("code") or "NOCODE").upper().strip()
-                    code = re.sub(r'[\\/*?:"<>|]+', "_", code).strip("._- ") or "NOCODE"
-
-                    if prog_target != "all":
-                        # If course code starts with BT, BTECH, or NEP patterns, it is guaranteed B.Tech
-                        if re.search(r"^BT|BTECH|^\d{2}(UD|AF)|UD.*PEC|^PEC", code):
-                            pass
-                        elif info["programme"] not in (prog_target, "unknown"):
-                            print(f"      - Skip PDF: programme '{info['programme']}' does not match target '{prog_target}'")
-                            verdict = "skip"
-                        elif c["prog"] not in (prog_target, "unknown"):
-                            print(f"      - Skip PDF: card prog '{c['prog']}' does not match target '{prog_target}'")
+                        # 3. Year verification
+                        paper_year = info.get("year") or c.get("year")
+                        if verdict == "keep" and paper_year and int(paper_year) < since:
+                            print(f"      - Skip PDF: year {paper_year} < {since}")
                             verdict = "skip"
 
-                    # 3. Year verification
-                    paper_year = info.get("year") or c.get("year")
-                    if verdict == "keep" and paper_year and int(paper_year) < since:
-                        print(f"      - Skip PDF: year {paper_year} < {since}")
-                        verdict = "skip"
-
-                    # 4. Course code whitelist verification
-                    if verdict == "keep" and codes and code not in codes:
-                        print(f"      - Skip PDF: code '{code}' not in whitelist {codes}")
-                        verdict = "skip"
-
-                    # 5. Semester verification
-                    sem_str, year_str, season_str, exam_type_str, code_str = compute_paper_metadata(c, info, sub.get("sem"))
-                    sem_num = int(sem_str.replace("sem", "")) if sem_str.startswith("sem") and sem_str[3:].isdigit() else None
-                    if verdict == "keep" and allowed and sem_num is not None and sem_num not in allowed:
-                        print(f"      - Skip PDF: semester {sem_num} not in allowed {allowed}")
-                        verdict = "skip"
-
-                    # 6. Branch verification from PDF text and verified code
-                    if verdict == "keep" and branches:
-                        allowed_branch, branch_reason = is_allowed_branch(code, text, branches)
-                        if not allowed_branch:
-                            print(f"      - Skip PDF: {branch_reason} (code: '{code}')")
+                        # 4. Course code whitelist verification
+                        if verdict == "keep" and codes and code not in codes:
+                            print(f"      - Skip PDF: code '{code}' not in whitelist {codes}")
                             verdict = "skip"
 
-                    if verdict == "skip":
-                        sub_manifest["hashes"][h] = "skipped"
-                        manifest["hashes"][h] = "skipped"
-                        continue
+                        # 5. Semester verification
+                        sem_str, year_str, season_str, exam_type_str, code_str = compute_paper_metadata(c, info, sub.get("sem"))
+                        sem_num = int(sem_str.replace("sem", "")) if sem_str.startswith("sem") and sem_str[3:].isdigit() else None
+                        if verdict == "keep" and allowed and sem_num is not None and sem_num not in allowed:
+                            print(f"      - Skip PDF: semester {sem_num} not in allowed {allowed}")
+                            verdict = "skip"
 
-                    # Compute requested naming format: sem-year-sum/win-R/S-Code[-n].pdf
-                    base_name = f"{sem_str}-{year_str}-{season_str}-{exam_type_str}-{code_str}"
-                    base_name = re.sub(r'[\\/*?:"<>|]+', "_", base_name).strip("._- ")
-                    
-                    # Save into semester-wise subfolder (e.g. Dedicated/sem5/ or Machine_Learning/sem5/)
-                    target_folder = folder / sem_str
-                    target_folder.mkdir(parents=True, exist_ok=True)
-                    dest, is_dup = resolve_destination(target_folder, base_name, h)
+                        # 6. Branch verification from PDF text and verified code
+                        if verdict == "keep" and branches:
+                            allowed_branch, branch_reason = is_allowed_branch(code, text, branches)
+                            if not allowed_branch:
+                                print(f"      - Skip PDF: {branch_reason} (code: '{code}')")
+                                verdict = "skip"
 
-                    if is_dup:
+                        if verdict == "skip":
+                            sub_manifest["hashes"][h] = "skipped"
+                            manifest["hashes"][h] = "skipped"
+                            continue
+
+                        # Compute requested naming format: sem-year-sum/win-R/S-Code[-n].pdf
+                        base_name = f"{sem_str}-{year_str}-{season_str}-{exam_type_str}-{code_str}"
+                        base_name = re.sub(r'[\\/*?:"<>|]+', "_", base_name).strip("._- ")
+                        
+                        # Save into semester-wise subfolder (e.g. Dedicated/sem5/ or Machine_Learning/sem5/)
+                        target_folder = folder / sem_str
+                        target_folder.mkdir(parents=True, exist_ok=True)
+                        dest, is_dup = resolve_destination(target_folder, base_name, h)
+
+                        if is_dup:
+                            sub_manifest["hashes"][h] = str(dest)
+                            manifest["hashes"][h] = str(dest)
+                            print(f"      = Duplicate paper content already saved: {dest.name}")
+                            continue
+
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_bytes(data)
                         sub_manifest["hashes"][h] = str(dest)
                         manifest["hashes"][h] = str(dest)
-                        print(f"      = Duplicate paper content already saved: {dest.name}")
-                        continue
+                        kept += 1
+                        print(f"    + [SAVED ] {sem_str}/{dest.name}")
+                        sub_manifest_path.write_text(json.dumps(sub_manifest, indent=2))
+                        manifest_path.write_text(json.dumps(manifest, indent=2))
 
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(data)
-                    sub_manifest["hashes"][h] = str(dest)
-                    manifest["hashes"][h] = str(dest)
-                    kept += 1
-                    print(f"    + [SAVED ] {sem_str}/{dest.name}")
-                    sub_manifest_path.write_text(json.dumps(sub_manifest, indent=2))
-                    manifest_path.write_text(json.dumps(manifest, indent=2))
+                sub_manifest_path.write_text(json.dumps(sub_manifest, indent=2))
+                print(f"  -> Total saved for '{sub['name']}': {kept} paper(s)")
 
-            sub_manifest_path.write_text(json.dumps(sub_manifest, indent=2))
-            print(f"  -> Total saved for '{sub['name']}': {kept} paper(s)")
+            manifest_path.write_text(json.dumps(manifest, indent=2))
 
-        manifest_path.write_text(json.dumps(manifest, indent=2))
         ctx.close()
 
     print("\nCompleted bulk fetch.")

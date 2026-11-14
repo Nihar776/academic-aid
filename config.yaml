@@ -1,22 +1,30 @@
-# ---- where PDFs go -------------------------------------------------------
-# Point this at your local or cloud-synced folder
-# Windows example: "G:/My Drive/PYQs"      Mac example: "~/Google Drive/My Drive/PYQs"
-output_dir: "./PYPs/AIML/Semester-05/"
+# ==============================================================================
+# DBATU PYP Fetcher - BASE Configuration (config.yaml)
+# ==============================================================================
+# Central defaults for scraper execution, portal URL, credentials, and filters.
+# Branch- or semester-specific subjects are kept in secondary config files
+# (e.g. `configs/aiml_sem5.yaml`, `configs/cse_sem5.yaml`) and invoked with `-s`.
+# Any setting in a secondary config will override the defaults set here.
 
-# Question Papers section URL on Knimbus (used as the starting point)
+# ---- Default Output Directory ------------------------------------------------
+# Central default folder where question papers are organized and saved.
+output_dir: "./PYPs/"
+
+# ---- Knimbus Digital Library Portal URL --------------------------------------
+# Starting URL for the DBATU digital library question papers section.
 base_url: "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?sectionId=1ad6bd68-4cc6-4d8b-8550-2203b35075ef&sectionName=QUESTION+PAPERS"
 
-# ---- Optional credentials for auto-login ----------------------------------
+# ---- Optional credentials for auto-login -------------------------------------
 # If set, the script can log in automatically even in headless mode.
-# If left empty, run 'python pyq_fetch.py' in your own terminal to log in interactively.
+# If left empty, run in headful mode to log in interactively via browser window.
 credentials:
   email: "createlearningforall@gmail.com"
   password: "Abc@123"
 
-# ---- course / degree filter ----------------------------------------------
-# Target degree/course type. Papers downloaded will match this course.
-# Options matching Knimbus REPOSITORY filter:
-#   - "B.Tech Question Paper"  (or shorthand: "btech")   <-- DEFAULT (B.Tech only)
+# ---- Degree / Course Filter --------------------------------------------------
+# Target degree/course. (Unified with portal filters; matches Knimbus REPOSITORY facet)
+# Options:
+#   - "B.Tech Question Paper"  (or shorthand: "btech")   <-- DEFAULT
 #   - "Diploma Question Paper" (or shorthand: "diploma")
 #   - "M.Tech Question Paper"  (or shorthand: "mtech")
 #   - "B. Pharmacy Question Paper" (or shorthand: "pharmacy")
@@ -24,94 +32,35 @@ credentials:
 #   - "all" (downloads across all courses without filtering)
 course: "B.Tech Question Paper"
 
-# Last years -> exam year must be >= this (e.g. 2022..2026)
+# ---- Exam Year Range ---------------------------------------------------------
+# Exam year must be >= this (e.g. 2022..2026)
 since_year: 2022
 
-# ---- portal filters ------------------------------------------------------
-# Detailed portal filters applied to Knimbus sidebar facets:
+# ---- Portal Sidebar Filters --------------------------------------------------
+# Facets applied directly on Knimbus sidebar:
 filters:
-  repository: "B.Tech Question Paper"   # [default]
   subject: null                         # None (avoids restrictive portal locks; code-level filter handles branches)
   publication_year: null                # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
   year: null                            # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
   dept: null                            # from config.yaml (e.g. null or ["Computer Engineering"])
-  course: null                          # from config.yaml (e.g. null)
   author:                               # supplementary, summer, winter
     - "supplementary"
     - "summer"
     - "winter"
 
-# ---- branch / discipline filter ------------------------------------------
-# Narrow papers down to specific branches/disciplines.
-# Matches Knimbus SUBJECT filter and DBATU course codes.
-# Options:
-#   - "Computer Engineering"
-#   - "Computer Science and Engineering"
-#   - "Information Technology"
-# Leave [] or omit to accept all branches.
+# ---- Default Branch / Discipline Filter --------------------------------------
+# Default branches accepted by DBATU course code and PDF text heuristics.
+# Secondary configs can override this (e.g. CSE, IT, AIML).
 branches:
   - "Computer Engineering"
   - "Computer Science and Engineering"
-  # - "Information Technology"
+  - "Information Technology"
   - "Artificial Intelligence and Machine Learning"
 
-max_pages: 15          # safety cap on result pages per subject
+# Safety cap on result pages crawled per subject
+max_pages: 15
 
-# ---- subjects ------------------------------------------------------------
-# search     : query typed in Knimbus "search within results"
-# keywords   : ALL must appear in the card title
-# exclude    : if ANY appears in title, paper is skipped (e.g. "advanced" to drop "Advanced Machine Learning")
-# sem        : target semester (e.g. 5, [5, 6], or null to accept all semesters)
-# codes      : optional list of course codes (leave [] to accept all codes)
-# output_dir : optional dedicated folder for this subject (if omitted, uses general output_dir at start)
-subjects:
-  - name: Machine Learning
-    search: machine learning
-    keywords: ["machine learning"]
-    exclude: ["advanced", "introduction"]
-    sem: 5
-    codes: []
-
-  - name: AI in Cyber Security
-    search: cyber security
-    keywords: ["cyber"]
-    exclude: []
-    sem: 5
-    codes: []
-
-  - name: Entrepreneurship Skills and Digital Marketing Strategies
-    search: entrepreneurship
-    keywords: ["entrepreneurship"]
-    exclude: []
-    sem: 5
-    codes: []
-
-  - name: Database Management Systems
-    search: database management
-    keywords: ["database"]
-    exclude: ["advanced"]
-    sem: 5
-    codes: []
-
-  - name: Cloud and Distributed AI Systems
-    search: distributed
-    keywords: ["distributed"]
-    exclude: []
-    sem: 5
-    codes: []
-
-  - name: Data Engineering and Big Data
-    search: big data
-    keywords: ["data"]
-    exclude: []
-    sem: 5
-    codes: []
-
-  - name: Programming in Java
-    search: java
-    keywords: ["java"]
-    exclude: ["advanced"]
-    sem: 5
-    codes: []
-
-
+# ---- Base Subjects List (Optional) -------------------------------------------
+# Leave empty `[]` when using secondary configs (e.g. `python pyq_fetch.py -s configs/aiml_sem5.yaml`).
+# If no secondary config is passed and this list is empty, the program will prompt you to pick a config.
+subjects: []

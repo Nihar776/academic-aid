@@ -33,20 +33,25 @@ It searches course materials, applies portal and content filters, extracts metad
 
 ```text
 dbatu-pyp-fetcher/
-├── config.yaml          # Subjects, target branches, semester, and credentials
+├── config.yaml          # Base configuration (central URL, credentials, default output dir, filters)
+├── configs/             # Branch / Course / Semester-specific subject configs
+│   ├── aiml_sem5.yaml   # AI & ML Semester 5 subjects and branch overrides
+│   ├── cse_sem5.yaml    # Computer Science & Engineering Semester 5 subjects
+│   └── it_sem5.yaml     # Information Technology Semester 5 subjects
 ├── pyq_fetch.py         # Main crawler, parser, and download engine
 ├── requirements.txt     # Python dependencies
 ├── pyrightconfig.json   # Static analysis / type configuration
 ├── .gitignore           # Ignores PDFs, caches, and browser profile
 └── PYPs/                # Downloaded papers organized by subject & semester
-    └── Semester-05/
-        ├── Machine_Learning/
-        │   ├── sem5/
-        │   │   ├── sem5-2022-winter-R-BTCOC501.pdf
-        │   │   └── sem5-2023-winter-R-BTCOC501.pdf
-        │   └── sem6/
-        │       └── sem6-2024-summer-R-BTCOC602.pdf
-        └── manifest.json
+    └── AIML/
+        └── Semester-05/
+            ├── Machine_Learning/
+            │   ├── sem5/
+            │   │   ├── sem5-2022-winter-R-BTCOC501.pdf
+            │   │   └── sem5-2023-winter-R-BTCOC501.pdf
+            │   └── sem6/
+            │       └── sem6-2024-summer-R-BTCOC602.pdf
+            └── manifest.json
 ```
 
 ---
@@ -70,56 +75,65 @@ dbatu-pyp-fetcher/
 
 ---
 
-## Configuration (`config.yaml`)
+## Configuration Architecture
 
-Configure your target directory, credentials, branches, and subjects in `config.yaml`:
+The project splits configuration into two modular, functional layers:
+
+### 1. Base Configuration (`config.yaml`)
+Contains global defaults for the scraper:
+- Central default `output_dir`
+- Knimbus `base_url` and `credentials`
+- Unified `course` degree filter (matches Knimbus `REPOSITORY` facet)
+- `since_year`, `filters`, `branches`, and `max_pages`
+- Optional default `subjects: []` (if empty, the program will prompt you to select a secondary config)
 
 ```yaml
-# Destination folder for downloaded papers
-output_dir: "./PYPs/Semester-05/"
-
-# Knimbus Question Papers section URL
+output_dir: "./PYPs/"
 base_url: "https://dbatulibrary.knimbus.com/portal/v2/default/results/section?sectionId=1ad6bd68-4cc6-4d8b-8550-2203b35075ef&sectionName=QUESTION+PAPERS"
 
-# Optional credentials for automated login (leave blank to log in manually in browser)
 credentials:
   email: "your_email@example.com"
   password: "your_password"
 
-# Degree filter: "B.Tech Question Paper", "Diploma Question Paper", "M.Tech Question Paper", or "all"
 course: "B.Tech Question Paper"
-
-# Filter out older question papers (>= since_year)
 since_year: 2022
 
-# ---- portal filters ------------------------------------------------------
-# Detailed portal filters applied to Knimbus sidebar facets:
 filters:
-  repository: "B.Tech Question Paper"   # [default] B.Tech Question Paper
   subject: null                         # None (avoids restrictive portal locks; code-level filter handles branches)
   publication_year: null                # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
   year: null                            # from config.yaml (e.g. [2022, 2023, 2024, 2025, 2026] or null)
   dept: null                            # from config.yaml (e.g. null or ["Computer Engineering"])
-  course: null                          # from config.yaml (e.g. null)
   author:                               # supplementary, summer, winter
     - "supplementary"
     - "summer"
     - "winter"
 
-# Target branches to download (leave [] for all branches)
+branches:
+  - "Computer Engineering"
+  - "Computer Science and Engineering"
+  - "Information Technology"
+  - "Artificial Intelligence and Machine Learning"
+
+max_pages: 15
+subjects: []
+```
+
+### 2. Secondary Subject Configurations (`configs/*.yaml`)
+Contains branch- or semester-specific subjects. **Any setting specified in a secondary config automatically overrides the base config** (for example, overriding `branches` or `output_dir`):
+
+Example (`configs/aiml_sem5.yaml`):
+```yaml
+output_dir: "./PYPs/AIML/Semester-05/"
+
 branches:
   - "Computer Engineering"
   - "Computer Science and Engineering"
   - "Artificial Intelligence and Machine Learning"
 
-# Max result pages to crawl per subject
-max_pages: 15
-
-# List of subjects to search and fetch
 subjects:
   - name: Machine Learning
     search: machine learning
-    # output_dir: "D:/My Drive/ML_PYQs"  # Optional dedicated address (if omitted, uses general output_dir)
+    # output_dir: "D:/Dedicated_ML_Drive" # Optional dedicated address per subject
     keywords: ["machine learning"]
     exclude: ["advanced", "introduction"]
     sem: 5
@@ -131,80 +145,65 @@ subjects:
     exclude: []
     sem: 5
     codes: []
-
-  - name: Operating Systems
-    search: operating systems
-    keywords: ["operating system"]
-    exclude: ["advanced"]
-    sem: 5
-    codes: []
 ```
-
-### Subject Configuration Options:
-- `name`: Human-readable subject name (used for folder naming).
-- `search`: Keyword string typed into Knimbus "Search within results".
-- `output_dir`: *(Optional)* Dedicated folder address for this specific subject. If specified, PDFs are downloaded and organized into `sem5/` inside this dedicated directory. If omitted, uses the general `output_dir` at the top of `config.yaml`.
-- `keywords`: Keywords that **must** appear in the card title.
-- `exclude`: Discard paper if **any** of these terms appear in the title (e.g. `advanced`).
-- `sem`: Target semester (`5`, `[5, 6]`, or `null` for any semester).
-- `codes`: Optional whitelist of DBATU course codes (e.g. `["BTCOC501"]`). Leave empty `[]` to accept all matched codes.
 
 ---
 
-## Usage
+## Usage (The 6 Execution Scenarios)
 
-### 1. Default Run (Interactive Browser)
-Uses `config.yaml` to crawl and download all configured subjects:
+The program supports 6 distinct execution patterns:
+
+### Case 1: Default Base Config (No Flags)
 ```bash
 python pyq_fetch.py
 ```
-*(On the first run, if credentials are not in `config.yaml`, log in to Knimbus in the opened browser window. Playwright will store your session in `.browser-profile/` for future runs).*
+- Uses `config.yaml`.
+- If `config.yaml` has subjects, runs them immediately.
+- If `config.yaml` has no subjects, displays an interactive list of discovered configs in `configs/` and prompts you to select one or exit.
 
-### 2. Run in Headless Mode
-Runs silently in the background without opening a visible browser window:
+### Case 2: Custom Base Config Only
 ```bash
-python pyq_fetch.py --headless
+python pyq_fetch.py -c my_base_config.yaml
 ```
+- Uses `my_base_config.yaml` as the base configuration.
 
-### 3. Fetch for Specific Subject(s) (`--only`)
-Fetch papers for one or multiple subjects using full names, acronyms, or comma-separated lists:
+### Case 3: Single Secondary Config on Default Base Config
 ```bash
-# By acronym or short name:
-python pyq_fetch.py --only ML
-python pyq_fetch.py --only DBMS
-
-# Multiple subjects at once:
-python pyq_fetch.py --only ML DBMS
-python pyq_fetch.py --only ML,DBMS,cyber
-python pyq_fetch.py --only "AI in Cyber Security" "Machine Learning"
+python pyq_fetch.py -s configs/aiml_sem5.yaml
 ```
+- Uses `config.yaml` as base defaults, merges `configs/aiml_sem5.yaml`, and downloads the AIML subjects with their branch and output folder overrides.
 
-### 4. Override Degree / Course Filter
-Download Diploma or M.Tech papers on the fly:
+### Case 4: Custom Base Config with Secondary Config
 ```bash
-python pyq_fetch.py --course "Diploma"
-python pyq_fetch.py --course "all"
+python pyq_fetch.py -c custom_base.yaml -s configs/aiml_sem5.yaml
 ```
+- Uses `custom_base.yaml` for credentials/settings, and executes the subjects and overrides from `configs/aiml_sem5.yaml`.
 
-### 5. Debug Mode
-Saves screenshots and HTML dumps in `debug/` if an error occurs during scraping:
+### Case 5: Multiple Secondary Configs on Default Base Config
 ```bash
-python pyq_fetch.py --debug
+python pyq_fetch.py -s configs/aiml_sem5.yaml configs/cse_sem5.yaml
 ```
+- Opens the browser once, logs in once, and sequentially downloads and organizes papers for both AIML and CSE in their respective directories.
+
+### Case 6: Multiple Secondary Configs on Custom Base Config
+```bash
+python pyq_fetch.py -c custom_base.yaml -s configs/aiml_sem5.yaml configs/cse_sem5.yaml configs/it_sem5.yaml
+```
+- Uses custom credentials/base settings and runs all specified secondary configs in one unified session.
 
 ---
 
-## CLI Options
+## Additional CLI Options
 
-| Flag | Default | Description |
+| Flag | Shorthand | Description |
 |---|---|---|
-| `--config` | `config.yaml` | Path to custom YAML configuration file. |
-| `--only` | `None` | Restricts execution to a single subject name. |
-| `--course` | From config | Target course/degree (`B.Tech`, `Diploma`, `M.Tech`, `Pharmacy`, `all`). |
-| `--email` | From config | Knimbus login email for automated headless sign-in. |
-| `--password` | From config | Knimbus login password for automated headless sign-in. |
-| `--headless` | `False` | Runs Chromium in headless background mode. |
-| `--debug` | `False` | Captures screenshots and page HTML when errors occur. |
+| `--config` | `-c` | Path to base configuration file (default: `config.yaml`). |
+| `--secondary` | `-s` | One or more secondary subject configuration YAML files. |
+| `--only` | | Fetch only specific subject(s) by name, acronym, or comma-separated list (e.g. `--only ML DBMS` or `--only ML,cyber`). |
+| `--course` | | Target course/degree override (`B.Tech`, `Diploma`, `M.Tech`, `all`). |
+| `--headless` | | Runs browser silently in background mode. |
+| `--email` / `--password` | | Override login credentials via CLI. |
+| `--debug` | | Saves screenshots and HTML dumps in `debug/` on error. |
 
 ---
 

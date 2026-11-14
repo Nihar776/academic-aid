@@ -1,0 +1,29 @@
+# ==============================================================================
+# Secondary Config: Information Technology (IT) - Sem 5
+# ==============================================================================
+output_dir: "./PYPs/IT/Semester-05/"
+
+branches:
+  - "Information Technology"
+
+subjects:
+  - name: Database Management Systems
+    search: database management
+    keywords: ["database"]
+    exclude: ["advanced"]
+    sem: 5
+    codes: []
+
+  - name: Operating Systems
+    search: operating systems
+    keywords: ["operating system"]
+    exclude: ["advanced"]
+    sem: 5
+    codes: []
+
+  - name: Programming in Java
+    search: java
+    keywords: ["java"]
+    exclude: ["advanced"]
+    sem: 5
+    codes: []

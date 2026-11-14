@@ -1,0 +1,61 @@
+# ==============================================================================
+# Secondary Config: Artificial Intelligence & Machine Learning (AIML) - Sem 5
+# ==============================================================================
+# Overrides base config settings specifically for the AIML branch:
+output_dir: "./PYPs/AIML/Semester-05/"
+
+branches:
+  - "Computer Engineering"
+  - "Computer Science and Engineering"
+  - "Artificial Intelligence and Machine Learning"
+
+# Semester 5 AIML Subjects
+subjects:
+  - name: Machine Learning
+    search: machine learning
+    keywords: ["machine learning"]
+    exclude: ["advanced", "introduction"]
+    sem: 5
+    codes: []
+
+  - name: AI in Cyber Security
+    search: cyber security
+    keywords: ["cyber"]
+    exclude: []
+    sem: 5
+    codes: []
+
+  - name: Entrepreneurship Skills and Digital Marketing Strategies
+    search: entrepreneurship
+    keywords: ["entrepreneurship"]
+    exclude: []
+    sem: 5
+    codes: []
+
+  - name: Database Management Systems
+    search: database management
+    keywords: ["database"]
+    exclude: ["advanced"]
+    sem: 5
+    codes: []
+
+  - name: Cloud and Distributed AI Systems
+    search: distributed
+    keywords: ["distributed"]
+    exclude: []
+    sem: 5
+    codes: []
+
+  - name: Data Engineering and Big Data
+    search: big data
+    keywords: ["data"]
+    exclude: []
+    sem: 5
+    codes: []
+
+  - name: Programming in Java
+    search: java
+    keywords: ["java"]
+    exclude: ["advanced"]
+    sem: 5
+    codes: []
