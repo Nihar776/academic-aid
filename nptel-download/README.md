@@ -71,7 +71,7 @@ python nptel_pipeline.py -c 106106145 -d ./python_dsa_course
 
 ---
 
-## Directory Structure
+## Output Directory Structure
 
 Running the pipeline produces an organized hierarchy:
 
@@ -105,10 +105,21 @@ nptel_material/
 
 ---
 
-## Legacy Scripts Consolidated
+## Repository Structure
 
-This unified script replaces and deprecates:
-- `download_nptel.py`: Replaced with native NPTEL API queries (no Playwright needed).
-- `download_nptel_missing_lecs.py`: Integrated into the unified transcript downloader and `--videos` fallback.
-- `nptel_material_categorization.py`: Built into Step 4 consolidation.
-- `download_toc_ppts.py`: Integrated into `--ppts`.
+```text
+nptel-download/
+├── nptel_pipeline.py    # Complete standalone CLI pipeline (Zero dependencies)
+├── README.md            # Tool documentation & usage guide
+└── .gitignore
+```
+
+---
+
+## Consolidation History
+
+All legacy separate scripts have been unified into `nptel_pipeline.py` and removed:
+- **`download_nptel.py`**: Replaced with native NPTEL API queries (no Playwright or browser installation required).
+- **`download_nptel_missing_lecs.py`**: Integrated into the unified transcript downloader with the `--videos` fallback flag.
+- **`nptel_material_categorization.py`**: Integrated directly as a native consolidation step (run with `--categorize` or automatically with `--all`).
+- **`download_toc_ppts.py`**: Integrated via `--ppts` (and also available as a standalone tool in [`toc-ppts-downloader/`](../toc-ppts-downloader/)).
