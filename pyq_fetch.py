@@ -28,14 +28,16 @@ Usage:
 import argparse, hashlib, io, json, os, re, sys, time
 from datetime import date
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote, urlparse, parse_qsl, urlencode, urlunparse
 
-import yaml
+import yaml  # type: ignore
 from playwright.sync_api import sync_playwright  # type: ignore
 from pypdf import PdfReader
 
 # Ensure unbuffered real-time stdout output
-sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore
 
 ORD = {
     "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8,
@@ -72,7 +74,7 @@ def resolve_course(course_str: str) -> tuple[str, str]:
     return (course_str.strip(), course_str.strip().lower())
 
 
-def classify_code_or_title(code: str, title: str) -> str:
+def classify_code_or_title(code: str | None, title: str) -> str:
     """
     Identifies degree programme from DBATU course code and title.
     DBATU code patterns:
@@ -126,10 +128,10 @@ def pdf_first_pages_text(data: bytes, pages=2) -> str:
         return ""
 
 
-def parse_paper(text: str) -> dict:
+def parse_paper(text: str) -> dict[str, Any]:
     t = re.sub(r"[ \t]+", " ", text)
     low = t.lower()
-    info = {"text": low}
+    info: dict[str, Any] = {"text": low}
 
     # Mid-Semester paper check in PDF
     is_mid_sem = bool(re.search(r"\b(mid\s*sem|mid\s*semester|class\s*test|ca-?\d|unit\s*test)\b", low))
@@ -182,7 +184,7 @@ def parse_paper(text: str) -> dict:
     return info
 
 
-def parse_card(text: str) -> dict:
+def parse_card(text: str) -> dict[str, Any]:
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
     # Extract course code in brackets [] or parentheses ()
@@ -1007,7 +1009,7 @@ def main():
                     # Fetch PDF using multi-vector delivery engine
                     data, url, note = fetch_pdf(ctx, page, btn)
                     if not data:
-                        print(f"    ! Could not fetch PDF for '{c['title']}': {note} ({str(url)[:70]})")
+                        print(f"    ! Could not fetch PDF for '{c['title']}': {note} ({url[:70]})")
                         continue
 
                     h = hashlib.sha256(data).hexdigest()
