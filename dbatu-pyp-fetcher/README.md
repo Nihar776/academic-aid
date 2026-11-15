@@ -35,6 +35,7 @@ It searches course materials, applies portal and content filters, extracts metad
 dbatu-pyp-fetcher/
 ├── config.yaml          # Base configuration (central URL, credentials, default output dir, filters)
 ├── configs/             # Branch / Course / Semester-specific subject configs
+│   ├── ai_sem3.yaml     # AI Semester 3 (CE & CSE:AIML) subject and output config
 │   ├── aiml_sem5.yaml   # AI & ML Semester 5 subjects and branch overrides
 │   ├── cse_sem5.yaml    # Computer Science & Engineering Semester 5 subjects
 │   └── it_sem5.yaml     # Information Technology Semester 5 subjects
@@ -204,6 +205,53 @@ When both the **Base** configuration (`config.yaml`) and a **Secondary** configu
 1. **All subjects are iterated**: The scraper runs every subject from both files.
 2. **Override & Inheritance**: If a subject with the same name exists in both files, the Secondary subject definition overrides and extends the Base subject (inheriting any unmentioned fields).
 3. **Preservation**: Unique subjects from Base are preserved; unique subjects from Secondary are appended.
+
+---
+
+## 🤖 Generate Config Files with AI (Zero Technical Knowledge)
+
+If you don't want to manually write YAML files or figure out search queries and keywords, copy and paste the prompt below into any AI assistant (**ChatGPT, Gemini, Claude**, etc.) along with your syllabus or subject details.
+
+The AI will generate a ready-to-use YAML configuration file and provide a complete, beginner-friendly walkthrough explaining how to use it.
+
+### Copy-Paste LLM Prompt Template
+
+````text
+Act as an expert configuration assistant for the DBATU PYP Fetcher tool.
+I want to create a configuration YAML file (secondary config or base config) to bulk-download Previous Year Question Papers (PYPs) from the Knimbus digital library portal for DBATU (Dr. Babasaheb Ambedkar Technological University).
+
+Here are my details:
+- Target Degree/Course: [e.g., B.Tech, Diploma, M.Tech (Default: B.Tech)]
+- Branch / Department: [e.g., Computer Engineering, AIML, IT, Civil, Mechanical, etc.]
+- Semester: [e.g., Semester 3, Semester 5]
+- Subjects list or Syllabus snippet:
+  [Paste your subject names, syllabus topics, or course codes here]
+- Output Directory (Optional): [e.g., "J:/My Drive/SEM-03/AI PYPs" or leave blank for default ./PYPs/]
+- Config Type Needed: [Secondary config (configs/<branch>_sem<X>.yaml) OR Base config (config.yaml)]
+
+Please do the following:
+1. GENERATE THE CONFIG YAML FILE:
+   - Provide the complete, clean, syntax-valid YAML code block.
+   - Use forward slashes (/) for folder paths (Windows/Linux safe).
+   - Set the appropriate `branches` list matching DBATU branch naming conventions (e.g. "Computer Engineering", "Computer Science and Engineering", "Information Technology", "Artificial Intelligence and Machine Learning").
+   - For each subject, structure:
+     - `name`: Clean, full subject title.
+     - `search`: Broad, effective Knimbus search query (lowercase, 1-3 words).
+     - `keywords`: Key phrases that must be present in the paper title.
+     - `exclude`: Any conflicting terms to exclude (e.g. avoid "advanced" or "cyber" if not applicable; use [] if none).
+     - `sem`: Semester number as an integer.
+     - `codes`: Specific DBATU course codes if known, or empty list `[]`.
+     - `output_dir`: Include if a dedicated subject folder was requested.
+
+2. EXPLAIN THE ENTIRE END-TO-END PROCESS FOR A BEGINNER:
+   - File Placement: Exactly what filename to give it and which directory to save it in (e.g., save secondary configs under `configs/<name>.yaml`).
+   - Run Commands: The exact terminal / PowerShell commands to run the scraper:
+     * Full batch run: `python pyq_fetch.py -s configs/<file>.yaml`
+     * Single subject run: `python pyq_fetch.py -s configs/<file>.yaml --only <subject_name_or_acronym>`
+   - First-time Setup & Execution: What to expect when running (Chromium opening, auto-login with credentials or manual login, persistent session caching in `.browser-profile/`).
+   - Output & Organization: Where files are saved, the standardized file naming format (`sem-year-season-R/S-Code.pdf`), and how deduplication (`manifest.json`) prevents re-downloading existing papers.
+   - Troubleshooting: Quick tips if papers aren't found (adjusting keywords/search terms, checking since_year).
+````
 
 ---
 

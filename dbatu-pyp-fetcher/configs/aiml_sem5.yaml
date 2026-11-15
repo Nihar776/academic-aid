@@ -2,7 +2,7 @@
 # Secondary Config: Artificial Intelligence & Machine Learning (AIML) - Sem 5
 # ==============================================================================
 # Overrides base config settings specifically for the AIML branch:
-output_dir: "./PYPs/AIML/Semester-05/"
+output_dir: "J:/My Drive/Nihar.notesAndPYPs.Helping_Hands/CSE-AIML"
 
 branches:
   - "Computer Engineering"

@@ -1,0 +1,20 @@
+# ==============================================================================
+# Secondary Config: Artificial Intelligence (AI) - Semester 3
+# ==============================================================================
+# Branches: Computer Engineering (CE) & CSE:AIML
+output_dir: "J:/My Drive/Nihar.notesAndPYPs.Helping_Hands/SEM-03/AI PYPs"
+
+branches:
+  - "Computer Engineering"
+  - "Computer Science and Engineering"
+  # - "Artificial Intelligence and Machine Learning"
+
+# Semester 3 AI Subject
+subjects:
+  - name: Artificial Intelligence
+    search: artificial intelligence
+    keywords: ["artificial intelligence"]
+    exclude: []
+    sem: 3
+    codes: []
+    output_dir: "J:/My Drive/Nihar.notesAndPYPs.Helping_Hands/SEM-03/AI PYPs"

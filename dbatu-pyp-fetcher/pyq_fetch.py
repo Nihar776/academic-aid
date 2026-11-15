@@ -395,7 +395,7 @@ def is_allowed_branch(code: str, card_or_pdf_text: str, branches: list[str] | No
 
     # 2. Computer / IT prefix in DBATU:
     # BTCOC/BTCOE = Computer Eng, BTCSD/BTCSE = Computer Science, BTIT/BTITOE = IT, BTAIC = AI/Data Science (CSE allied)
-    if re.search(r"^(BTCOC|BTCOE|BTCO|BTCSD|BTCSE|BTCS|BTIT|BTITOE|BTAIC|BTAI)", c):
+    if re.search(r"^(BTCOC|BTCOE|BTCO|BTCSD|BTCSE|BTCS|BTIT|BTITOE|BTAIC|BTAI|\d{2}(?:UD|AF)(?:AIML|AI|CO|CS|IT))", c):
         return True, f"code prefix '{c[:4]}' matches CS/IT"
 
     # 3. Text analysis from card or PDF header
@@ -562,22 +562,21 @@ def apply_portal_filters(page, filters_cfg: dict):
             let changed = false;
 
             // 1. Expand any collapsed filter sections in the sidebar
-            const headers = Array.from(document.querySelectorAll("*")).filter(el => {
-                const t = el.textContent.trim().toUpperCase();
-                return (t.startsWith("REPOSITORY") || t.startsWith("SEMESTER") || t.startsWith("SUBJECT") || 
-                        t.startsWith("COURSE") || t.startsWith("AUTHOR") || t.startsWith("PUBLICATION YEAR") || 
-                        t.startsWith("YEAR") || t.startsWith("DEPARTMENT") || t.startsWith("DEPT")) && el.children.length <= 2;
-            });
-            for (const h of headers) {
-                try { h.click(); } catch(e) {}
+            const sidebar = document.querySelector("#filterCustomAccordian, .filter-block");
+            if (sidebar) {
+                const collapsedButtons = Array.from(sidebar.querySelectorAll(".accordion-button.collapsed, button.collapsed"));
+                for (const btn of collapsedButtons) {
+                    try { btn.click(); } catch(e) {}
+                }
             }
 
             // Helper to find and check checkbox or element
             const checkOption = (labelPattern, sectionHint = null) => {
-                let elements = Array.from(document.querySelectorAll("label, span, a, li, div"));
+                const scope = document.querySelector("#filterCustomAccordian, .filter-block") || document;
+                let elements = Array.from(scope.querySelectorAll("label.filter-item-box, label, span, li, div"));
                 if (sectionHint) {
                     const sec = elements.filter(el => {
-                        const t = el.closest(".panel, .card, .filter-group, [class*='filter'], [class*='accordion'], div")?.textContent || "";
+                        const t = el.closest(".accordion-item, .panel, .card, [class*='filter'], div")?.textContent || "";
                         return new RegExp(sectionHint, "i").test(t);
                     });
                     if (sec.length > 0) elements = sec;
