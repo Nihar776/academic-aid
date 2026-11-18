@@ -550,6 +550,10 @@ def apply_portal_filters(page, filters_cfg: dict):
     - dept: from config.yaml
     - course: from config.yaml
     - author: ["supplementary", "summer", "winter"]
+
+    Prefers the unified "View All" modal dialog to select multiple filters across tabs
+    atomically and submits them via 'Apply'. Falls back to the sidebar accordion if the modal
+    is unavailable.
     """
     repo = filters_cfg.get("repository") or "B.Tech Question Paper"
     authors = filters_cfg.get("author") or ["supplementary", "summer", "winter"]
@@ -557,6 +561,147 @@ def apply_portal_filters(page, filters_cfg: dict):
 
     before_count = results_count(page)
     print(f"  [filter] Applying portal filters (Repository: '{repo}', Subject: {sub}, Author: {authors})...")
+
+    # 1. Primary Strategy: Unified "View All" modal dialog
+    try:
+        modal_opened = page.evaluate("""() => {
+            const link = document.querySelector("#filterCustomAccordian a[data-bs-target^='#basicModalViewAll'], .filter-block a[data-bs-target^='#basicModalViewAll'], a[data-bs-target^='#basicModalViewAll']");
+            if (link) {
+                link.click();
+                return true;
+            }
+            return false;
+        }""")
+        if modal_opened:
+            page.wait_for_timeout(1000)
+
+            # Helper to select a tab on the left and check corresponding options on the right
+            def select_modal_tab_and_check(tab_name: str, patterns: list[str]):
+                tab_found = page.evaluate("""(tabName) => {
+                    const m = document.querySelector(".modal.show, .modal[style*='display: block']");
+                    if (!m) return false;
+                    const tabs = Array.from(m.querySelectorAll(".lSec li, .navSelection li"));
+                    const tab = tabs.find(t => t.textContent.trim().toUpperCase().startsWith(tabName.toUpperCase()));
+                    if (!tab) return false;
+                    (tab.querySelector(".filter-title") || tab).click();
+                    return true;
+                }""", tab_name)
+                if not tab_found:
+                    return []
+                page.wait_for_timeout(400)
+
+                checked = page.evaluate("""(patterns) => {
+                    const m = document.querySelector(".modal.show, .modal[style*='display: block']");
+                    if (!m) return [];
+                    const labels = Array.from(m.querySelectorAll(".rSec label, .rSec .filter-sub-values"));
+                    const checkedList = [];
+                    for (const p of patterns) {
+                        const pat = new RegExp(p, "i");
+                        for (const l of labels) {
+                            if (pat.test(l.textContent.trim())) {
+                                const cb = l.querySelector("input[type='checkbox']");
+                                if (cb) {
+                                    if (!cb.checked) {
+                                        cb.click();
+                                        checkedList.push(l.textContent.trim());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return checkedList;
+                }""", patterns)
+                return checked
+
+            # 1. REPOSITORY
+            if repo and repo.lower() not in ("all", "none"):
+                repo_pat = "^" + re.escape(repo)
+                select_modal_tab_and_check("Repository", [repo_pat])
+
+            # 2. AUTHOR
+            if authors and isinstance(authors, list) and len(authors) > 0:
+                author_pats = []
+                for a in authors:
+                    al = str(a).lower()
+                    if "suppl" in al:
+                        author_pats.append("^Supplementary\\b")
+                    elif "summer" in al:
+                        author_pats.append("^Summer(\\s+Semester)?\\b")
+                    elif "winter" in al:
+                        author_pats.append("^Winter(\\s+Semester)?\\b")
+                    else:
+                        author_pats.append("^" + re.escape(str(a)))
+                select_modal_tab_and_check("Author", author_pats)
+
+            # 3. SUBJECT
+            if sub and str(sub).lower() not in ("none", "null"):
+                sub_list = sub if isinstance(sub, list) else [sub]
+                select_modal_tab_and_check("Subject", [re.escape(str(s)) for s in sub_list])
+
+            # 4. PUBLICATION YEAR / YEAR
+            pub_year = filters_cfg.get("publication_year")
+            if pub_year and str(pub_year).lower() not in ("none", "null"):
+                py_list = pub_year if isinstance(pub_year, list) else [pub_year]
+                select_modal_tab_and_check("Publication Year", [f"^{y}\\b" for y in py_list])
+
+            yr = filters_cfg.get("year")
+            if yr and str(yr).lower() not in ("none", "null"):
+                y_list = yr if isinstance(yr, list) else [yr]
+                select_modal_tab_and_check("Year", [f"^{y}\\b" for y in y_list])
+
+            # 5. DEPARTMENT / DEPT
+            dept = filters_cfg.get("dept") or filters_cfg.get("department")
+            if dept and str(dept).lower() not in ("none", "null"):
+                d_list = dept if isinstance(dept, list) else [dept]
+                select_modal_tab_and_check("Department", [re.escape(str(d)) for d in d_list])
+
+            # 6. SEMESTER
+            sem = filters_cfg.get("semester")
+            if sem and str(sem).lower() not in ("none", "null"):
+                s_list = sem if isinstance(sem, list) else [sem]
+                select_modal_tab_and_check("Semester", [re.escape(str(s)) for s in s_list])
+
+            # 7. COURSE
+            crs = filters_cfg.get("course")
+            if crs and str(crs).lower() not in ("none", "null"):
+                c_list = crs if isinstance(crs, list) else [crs]
+                select_modal_tab_and_check("Course", [re.escape(str(c)) for c in c_list])
+
+            # Click Apply button inside the modal
+            applied = page.evaluate("""() => {
+                const m = document.querySelector(".modal.show, .modal[style*='display: block']");
+                if (!m) return false;
+                const applyBtn = Array.from(m.querySelectorAll("button, .btn, a")).find(b => b.textContent.trim().toLowerCase() === "apply");
+                if (applyBtn) {
+                    applyBtn.click();
+                    return true;
+                }
+                return false;
+            }""")
+
+            if applied:
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(2500)
+
+                # Fix Knimbus's Drilldown-to bug:
+                # Knimbus's modal converts the search term into 'Drilldown to=...' instead of 'search_within=...'
+                cur_url = page.url
+                if re.search(r'Drilldown(?:\+|%20|\s)+to=', cur_url, re.I):
+                    fixed_url = re.sub(r'Drilldown(?:\+|%20|\s)+to=', 'search_within=', cur_url, flags=re.I)
+                    page.goto(fixed_url)
+                    page.wait_for_load_state("networkidle")
+                    page.wait_for_timeout(2000)
+
+                after_count = results_count(page)
+                if before_count is not None and after_count is not None:
+                    print(f"  [filter] View All modal applied: {after_count} papers available (filtered from {before_count})")
+                else:
+                    print("  [filter] Filters applied via View All modal.")
+                return
+    except Exception as e:
+        print(f"  [filter] View All modal notice: {e}. Falling back to sidebar.")
+
+    # 2. Fallback Strategy: Sidebar Accordion Checkboxes
     try:
         toggled = page.evaluate("""(filters) => {
             let changed = false;
@@ -949,7 +1094,14 @@ def main():
                 print(f"\n{'='*65}\n RUN {run_idx}/{total_runs}: [{run_label}] (Config: {cfg_source})\n{'='*65}")
 
             out = Path(cfg.get("output_dir", "./PYPs/")).expanduser()
-            out.mkdir(parents=True, exist_ok=True)
+            try:
+                out.mkdir(parents=True, exist_ok=True)
+            except (OSError, FileNotFoundError) as e:
+                fallback_out = Path("./PYPs/").resolve()
+                print(f"[!] Warning: Configured output directory '{out}' is unreachable ({e}).")
+                print(f"    Falling back to local directory: {fallback_out}")
+                out = fallback_out
+                out.mkdir(parents=True, exist_ok=True)
             since = cfg.get("since_year", date.today().year - 4)
             manifest_path = out / "manifest.json"
             manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"hashes": {}, "keys": {}}
@@ -1042,7 +1194,13 @@ def main():
                     folder = Path(sub_addr).expanduser()
                 else:
                     folder = out / slug(sub["name"])
-                folder.mkdir(parents=True, exist_ok=True)
+                try:
+                    folder.mkdir(parents=True, exist_ok=True)
+                except (OSError, FileNotFoundError) as e:
+                    fallback_folder = out / slug(sub["name"])
+                    print(f"    [!] Warning: Destination path '{folder}' unreachable ({e}). Falling back to '{fallback_folder}'")
+                    folder = fallback_folder
+                    folder.mkdir(parents=True, exist_ok=True)
 
                 # 2. Branches: subject -> secondary -> base
                 branches = sub.get("branches") or cfg.get("branches", [])
